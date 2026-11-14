@@ -36,6 +36,8 @@ class LibraryScreenInstrumentedTest {
                 store.importFile(blue, "blue.stl", DownloadProvenance("local", "", "Blue Model"))
                 store.importFile(red, "red.stl", DownloadProvenance("local", "", "Red Model"))
             }
+            assertEquals(setOf("Blue Model", "Red Model"),
+                runBlocking { store.listing().entries.map { it.provenance.title }.toSet() })
             val restoration = StateRestorationTester(compose)
             restoration.setContent { LibraryScreen(store, onOpen = {}, onBack = {}) }
             compose.waitUntil(5_000) {
@@ -63,6 +65,8 @@ class LibraryScreenInstrumentedTest {
             val store = DownloadStore(files, OkHttpClient())
             val first = File(files, "first.stl").apply { writeText("solid first\nendsolid first") }
             runBlocking { store.importFile(first, "first.stl", DownloadProvenance("local", "", "First Model")) }
+            assertEquals(listOf("First Model"),
+                runBlocking { store.listing().entries.map { it.provenance.title } })
             val owner = object : LifecycleOwner {
                 val registry = LifecycleRegistry(this)
                 override val lifecycle: Lifecycle = registry
@@ -93,6 +97,8 @@ class LibraryScreenInstrumentedTest {
             }
             store.fileFor(entry).delete()
             val reopened = DownloadStore(files, OkHttpClient())
+            assertEquals(listOf("Lost Model"),
+                runBlocking { reopened.recoverableDownloads().map { it.provenance.title } })
             var retried: String? = null
             compose.setContent {
                 LibraryScreen(reopened, onOpen = {}, onBack = {}, onRetryFromSource = { retried = it })

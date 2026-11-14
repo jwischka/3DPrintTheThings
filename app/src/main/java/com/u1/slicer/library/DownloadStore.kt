@@ -19,6 +19,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -77,7 +78,8 @@ class DownloadStore(
         val safeProvenance = normalizeProvenance(provenance)
         val parsedUrl = url.toHttpUrlOrNull() ?: throw IOException("Invalid download URL")
         if (parsedUrl.scheme !in listOf("http", "https")) throw IOException("Unsupported download URL")
-        root.mkdirs()
+        if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create downloads directory")
+        if (Files.isSymbolicLink(root.toPath())) throw IOException("Download root is a symbolic link")
         val partial = File(root, ".partial-${UUID.randomUUID()}")
         try {
             var nextUrl = parsedUrl
@@ -122,6 +124,7 @@ class DownloadStore(
             val safeName = safeFileName(filename)
             val safeProvenance = normalizeProvenance(provenance)
             if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create downloads directory")
+            if (Files.isSymbolicLink(root.toPath())) throw IOException("Download root is a symbolic link")
             val partial = File(root, ".partial-${UUID.randomUUID()}")
             try {
                 val context = currentCoroutineContext()
@@ -225,7 +228,7 @@ class DownloadStore(
     suspend fun recoverableDownloads(): List<RecoverableDownload> = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (!root.exists()) return@withLock emptyList()
-            if (root.canonicalFile != root.absoluteFile) throw IOException("Download root is a symbolic link")
+            if (Files.isSymbolicLink(root.toPath())) throw IOException("Download root is a symbolic link")
             val directories = root.listFiles() ?: throw IOException("Cannot read downloads directory")
             directories.mapNotNull { directory ->
                 if (!HASH_PATTERN.matches(directory.name) || !directory.isDirectory) return@mapNotNull null
@@ -261,6 +264,7 @@ class DownloadStore(
 
     private fun scanEntries(strict: Boolean): DownloadListing {
         if (!root.exists()) return DownloadListing(emptyList(), 0)
+        if (Files.isSymbolicLink(root.toPath())) throw IOException("Download root is a symbolic link")
         val directories = root.listFiles() ?: throw IOException("Cannot read downloads directory")
         val entries = mutableListOf<DownloadEntry>()
         var unreadable = 0
@@ -280,14 +284,15 @@ class DownloadStore(
         if (!HASH_PATTERN.matches(entry.sha256) || safeFileName(entry.fileName) != entry.fileName) {
             throw IllegalArgumentException("Invalid download entry path")
         }
+        if (Files.isSymbolicLink(root.toPath())) throw IOException("Download root is a symbolic link")
         val canonicalRoot = root.canonicalFile
         val expectedDirectory = File(canonicalRoot, entry.sha256)
-        if (expectedDirectory.canonicalFile != expectedDirectory.absoluteFile) {
+        if (Files.isSymbolicLink(expectedDirectory.toPath())) {
             throw IOException("Download directory is a symbolic link")
         }
         val file = File(expectedDirectory, entry.fileName)
         if (file.canonicalFile.parentFile != expectedDirectory) throw IOException("Unsafe download path")
-        if (file.exists() && file.canonicalFile != file.absoluteFile) throw IOException("Download file is a symbolic link")
+        if (Files.isSymbolicLink(file.toPath())) throw IOException("Download file is a symbolic link")
         return file
     }
 
@@ -338,11 +343,11 @@ class DownloadStore(
 
     private fun readMetadata(directory: File): DownloadEntry? {
         if (!directory.exists()) return null
-        if (directory.canonicalFile != directory.absoluteFile) throw IOException("Download directory is a symbolic link")
+        if (Files.isSymbolicLink(directory.toPath())) throw IOException("Download directory is a symbolic link")
         val files = directory.listFiles() ?: throw IOException("Cannot read download directory")
         // A crash before the metadata rename can leave a hash directory with no index.
         val index = files.firstOrNull { it.name == INDEX_FILE } ?: return null
-        if (!index.isFile || index.canonicalFile != index.absoluteFile || index.length() > MAX_INDEX_BYTES) {
+        if (!index.isFile || Files.isSymbolicLink(index.toPath()) || index.length() > MAX_INDEX_BYTES) {
             throw IOException("Invalid download metadata")
         }
         return try {

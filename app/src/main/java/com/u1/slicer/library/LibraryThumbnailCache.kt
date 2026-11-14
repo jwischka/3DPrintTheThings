@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
 import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
@@ -25,9 +26,9 @@ class LibraryThumbnailCache(cacheDir: File, private val store: DownloadStore) {
                 val model = store.fileFor(entry)
                 if (!model.isFile) return@withLock null
                 if (!root.isDirectory && !root.mkdirs()) return@withLock null
-                if (root.canonicalFile != root.absoluteFile) return@withLock null
+                if (Files.isSymbolicLink(root.toPath())) return@withLock null
                 val cached = File(root, "${entry.sha256}.thumb")
-                if (cached.isFile && cached.canonicalFile == cached.absoluteFile &&
+                if (cached.isFile && !Files.isSymbolicLink(cached.toPath()) &&
                     cached.length() > 0 && cached.length() <= MAX_THUMBNAIL_BYTES && hasImageSignature(cached)) return@withLock cached
                 if (cached.exists()) cached.delete()
                 val partial = File.createTempFile(".thumbnail-", ".tmp", root)
