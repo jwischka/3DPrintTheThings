@@ -27,6 +27,8 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name != 'push' }}
       - name: Fetch the pinned native source used by the JVM shim test
         run: |
           engine_commit=$(git ls-tree HEAD app/src/main/cpp/orcaslicer | awk '{print $3}')

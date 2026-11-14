@@ -21,6 +21,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import java.net.InetAddress
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
@@ -36,16 +37,19 @@ class DownloadStoreTest {
 
     @Before fun setUp() {
         server = MockWebServer()
-        server.start()
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
         filesDir = temporaryFolder.newFolder("files")
         store = DownloadStore(filesDir, OkHttpClient(), clockMillis = { 1234L })
     }
+
+    // Keep deliberate disconnects independent of localhost's IPv4/IPv6 route ordering.
+    private fun url(path: String) = server.url(path).newBuilder().host("127.0.0.1").build()
 
     @After fun tearDown() { server.shutdown() }
 
     @Test fun downloadPersistsAcrossStoreInstancesAndDeletes() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("solid benchy\nendsolid benchy\n"))
-        val entry = store.download(server.url("/signed?token=secret").toString(), "benchy.stl", provenance)
+        val entry = store.download(url("/signed?token=secret").toString(), "benchy.stl", provenance)
         assertEquals(64, entry.sha256.length)
         assertEquals("solid benchy\nendsolid benchy\n", store.fileFor(entry).readText())
         assertEquals(1, server.requestCount)
@@ -61,8 +65,8 @@ class DownloadStoreTest {
     @Test fun identicalBytesKeepFirstNameAndProvenance() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("same"))
         server.enqueue(MockResponse().setBody("same"))
-        val first = store.download(server.url("/one").toString(), "first.stl", provenance)
-        val second = store.download(server.url("/two").toString(), "second.3mf", provenance.copy(title = "Other"))
+        val first = store.download(url("/one").toString(), "first.stl", provenance)
+        val second = store.download(url("/two").toString(), "second.3mf", provenance.copy(title = "Other"))
         assertEquals(first, second)
         assertEquals(listOf(first), store.entries())
         assertEquals(2, server.requestCount)
@@ -79,7 +83,7 @@ class DownloadStoreTest {
 
     @Test fun invalidMetadataIsReportedWithoutDeletingFiles() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("model"))
-        val entry = store.download(server.url("/model").toString(), "model.stl", provenance)
+        val entry = store.download(url("/model").toString(), "model.stl", provenance)
         val metadata = File(filesDir, "downloads/${entry.sha256}/metadata.json")
         metadata.writeText("{")
         assertThrows(IOException::class.java) { runBlocking { store.entries() } }
@@ -97,7 +101,7 @@ class DownloadStoreTest {
 
     @Test fun stripsTraversalFromIncomingFilenameAndRejectsForgedEntry() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("model"))
-        val entry = store.download(server.url("/model").toString(), "../../folder\\model.3mf", provenance)
+        val entry = store.download(url("/model").toString(), "../../folder\\model.3mf", provenance)
         assertEquals("model.3mf", entry.fileName)
         assertThrows(IllegalArgumentException::class.java) {
             store.fileFor(entry.copy(fileName = "../escape.stl"))
@@ -109,14 +113,14 @@ class DownloadStoreTest {
 
     @Test fun longFilenamePreservesExtensionAndOversizeMetadataIsRejected() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("model"))
-        val entry = store.download(server.url("/long").toString(), "a".repeat(200) + ".3mf", provenance)
+        val entry = store.download(url("/long").toString(), "a".repeat(200) + ".3mf", provenance)
         assertEquals(128, entry.fileName.length)
         assertTrue(entry.fileName.endsWith(".3mf"))
 
         server.enqueue(MockResponse().setBody("different"))
         assertThrows(IOException::class.java) {
             runBlocking {
-                store.download(server.url("/metadata").toString(), "model.stl",
+                store.download(url("/metadata").toString(), "model.stl",
                     provenance.copy(title = "a".repeat(70_000)))
             }
         }
@@ -125,7 +129,7 @@ class DownloadStoreTest {
 
     @Test fun fileForRejectsSymlinkEvenWhenTargetIsInSameDirectory() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("model"))
-        val entry = store.download(server.url("/symlink").toString(), "model.stl", provenance)
+        val entry = store.download(url("/symlink").toString(), "model.stl", provenance)
         val file = store.fileFor(entry)
         val target = File(file.parentFile, "alternate.stl")
         target.writeText("model")
@@ -141,31 +145,36 @@ class DownloadStoreTest {
     @Test fun htmlAndOversizeAreRejectedWithoutPartialFiles() {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/html").setBody("<html>login</html>"))
         assertThrows(IOException::class.java) {
-            runBlocking { store.download(server.url("/html").toString(), "model.stl", provenance) }
+            runBlocking { store.download(url("/html").toString(), "model.stl", provenance) }
         }
         server.enqueue(MockResponse().setBody("<html>login</html>"))
         assertThrows(IOException::class.java) {
-            runBlocking { store.download(server.url("/sniff").toString(), "model.stl", provenance) }
+            runBlocking { store.download(url("/sniff").toString(), "model.stl", provenance) }
         }
         val smallStore = DownloadStore(filesDir, OkHttpClient(), maxBytes = 4)
         server.enqueue(MockResponse().setBody("12345"))
         assertThrows(IOException::class.java) {
-            runBlocking { smallStore.download(server.url("/large").toString(), "model.stl", provenance) }
+            runBlocking { smallStore.download(url("/large").toString(), "model.stl", provenance) }
         }
         assertTrue(runBlocking { store.entries() }.isEmpty())
         assertTrue(File(filesDir, "downloads").listFiles().orEmpty().isEmpty())
     }
 
-    @Test fun droppedResponseAndCancellationLeaveNoPartialFiles() {
+    @Test fun droppedResponseLeavesNoPartialFiles() {
         server.enqueue(MockResponse().setBody("x".repeat(100_000))
             .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY))
         assertThrows(IOException::class.java) {
-            runBlocking { store.download(server.url("/broken").toString(), "model.stl", provenance) }
+            runBlocking { store.download(url("/broken").toString(), "model.stl", provenance) }
         }
         assertEquals("/broken", server.takeRequest(5, TimeUnit.SECONDS)?.path)
+        assertTrue(runBlocking { store.entries() }.isEmpty())
+        assertTrue(File(filesDir, "downloads").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test fun cancellationLeavesNoPartialFiles() {
         server.enqueue(MockResponse().setBody("x".repeat(100_000)).throttleBody(1, 100, TimeUnit.MILLISECONDS))
         runBlocking {
-            val job = launch(Dispatchers.IO) { store.download(server.url("/slow").toString(), "model.stl", provenance) }
+            val job = launch(Dispatchers.IO) { store.download(url("/slow").toString(), "model.stl", provenance) }
             assertEquals("/slow", server.takeRequest(5, TimeUnit.SECONDS)?.path)
             withTimeout(5_000) { job.cancelAndJoin() }
         }
@@ -179,7 +188,7 @@ class DownloadStoreTest {
         try {
             server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", other.url("/file")))
             other.enqueue(MockResponse().setBody("model"))
-            store.download(server.url("/redirect").toString(), "model.stl", provenance,
+            store.download(url("/redirect").toString(), "model.stl", provenance,
                 headers = mapOf("Cookie" to "private=value", "Authorization" to "Bearer secret"))
             val first = server.takeRequest()
             val second = other.takeRequest()
