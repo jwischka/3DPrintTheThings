@@ -12,6 +12,8 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 runner.TEST_CLASS = (
     "com.u1.slicer.slicing.SlicingIntegrationTest#tetrahedron_stl_slicesSuccessfully,"
+    "com.u1.slicer.slicing.SlicingIntegrationTest#tetrahedron_stl_slicesSuccessfully_withRotation,"
+    "com.u1.slicer.slicing.BambuPipelineIntegrationTest#calibCube_dualColour_noBowdenUnloadSequence,"
     "com.u1.slicer.slicing.AndroidParityCaptureTest#captureCube10mmGcode"
 )
 sys.exit(runner.main())

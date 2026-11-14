@@ -11,7 +11,6 @@ extras=${NATIVE_EXTRA_DEPS_PREFIX:?Set NATIVE_EXTRA_DEPS_PREFIX to the real extr
 abi=${ANDROID_ABI:-arm64-v8a}
 case "$abi" in arm64-v8a) target=aarch64-linux-android ;; x86_64) target=x86_64-linux-android ;; *) echo 'Unsupported ABI' >&2; exit 1 ;; esac
 grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*26\.1\.10909125[[:space:]]*$' "$ndk/source.properties"
-[[ ! -e $work ]] || { echo 'Engine build directory must be fresh' >&2; exit 1; }
 test -d "$prefix/boost/include/boost"
 test -f "$prefix/zlib/lib/$abi/libz.a"
 test -f "$prefix/occt/lib/$abi/libTKernel.a"
@@ -20,24 +19,36 @@ test -f "$extras/jpeg/lib/libjpeg.a"
 test -f "$extras/libpng/include/png.h"
 test -f "$extras/openssl/lib/libcrypto.a"
 test -f "$extras/libnoise/lib/liblibnoise_static.a"
-mkdir -p "$work/cpp" "$work/output" "$work/extern"
-work=$(cd "$work" && pwd)
-prefix=$(cd "$prefix" && pwd)
-extras=$(cd "$extras" && pwd)
 gitlink=$(git -C "$repo" ls-tree HEAD app/src/main/cpp/orcaslicer | awk '{print $3}')
 [[ $gitlink =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid pinned engine gitlink' >&2; exit 1; }
-tar -C "$repo/app/src/main/cpp" --exclude='./orcaslicer' -cf - . | tar -C "$work/cpp" -xf -
-git init -q "$work/cpp/orcaslicer"
-git -C "$work/cpp/orcaslicer" remote add origin https://github.com/taylormadearmy/OrcaSlicer.git
-git -C "$work/cpp/orcaslicer" fetch --depth=1 --filter=blob:none origin "$gitlink"
-git -C "$work/cpp/orcaslicer" checkout --detach FETCH_HEAD
-[[ $(git -C "$work/cpp/orcaslicer" rev-parse HEAD) == "$gitlink" ]]
-for dependency in "$prefix"/*; do
-    [[ -e $dependency ]] || continue
-    [[ ${dependency##*/} == tbb_serial ]] && continue
-    ln -s "$dependency" "$work/extern/${dependency##*/}"
-done
-cp -R "$work/cpp/extern/tbb_serial" "$work/extern/tbb_serial"
+repo_head=$(git -C "$repo" rev-parse HEAD)
+if [[ ${NATIVE_ENGINE_PREPARED:-0} != 1 ]]; then
+    [[ ! -e $work ]] || { echo 'Engine build directory must be fresh' >&2; exit 1; }
+    mkdir -p "$work/cpp" "$work/output" "$work/extern"
+    work=$(cd "$work" && pwd)
+    prefix=$(cd "$prefix" && pwd)
+    extras=$(cd "$extras" && pwd)
+    tar -C "$repo/app/src/main/cpp" --exclude='./orcaslicer' -cf - . | tar -C "$work/cpp" -xf -
+    git init -q "$work/cpp/orcaslicer"
+    git -C "$work/cpp/orcaslicer" remote add origin https://github.com/taylormadearmy/OrcaSlicer.git
+    git -C "$work/cpp/orcaslicer" fetch --depth=1 --filter=blob:none origin "$gitlink"
+    git -C "$work/cpp/orcaslicer" checkout --detach FETCH_HEAD
+    [[ $(git -C "$work/cpp/orcaslicer" rev-parse HEAD) == "$gitlink" ]]
+    for dependency in "$prefix"/*; do
+        [[ -e $dependency ]] || continue
+        [[ ${dependency##*/} == tbb_serial ]] && continue
+        ln -s "$dependency" "$work/extern/${dependency##*/}"
+    done
+    cp -R "$work/cpp/extern/tbb_serial" "$work/extern/tbb_serial"
+    printf '%s %s\n' "$repo_head" "$abi" > "$work/prepared-for"
+    [[ ${NATIVE_ENGINE_PREPARE_ONLY:-0} != 1 ]] || exit 0
+else
+    work=$(cd "$work" && pwd)
+    prefix=$(cd "$prefix" && pwd)
+    extras=$(cd "$extras" && pwd)
+    [[ $(cat "$work/prepared-for") == "$repo_head $abi" ]]
+    [[ $(git -C "$work/cpp/orcaslicer" rev-parse HEAD) == "$gitlink" ]]
+fi
 launcher=()
 if command -v ccache >/dev/null 2>&1; then
     export CCACHE_BASEDIR="$work/cpp" CCACHE_COMPILERCHECK=content

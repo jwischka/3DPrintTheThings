@@ -4,6 +4,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.NativeLibrary
 import com.u1.slicer.data.SliceConfig
+import com.u1.slicer.gcode.GcodeParser
+import com.u1.slicer.gcode.GcodeValidator
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -66,6 +68,8 @@ class AndroidParityCaptureTest {
             assertTrue("Native slice returned no G-code path", result.gcodePath.isNotBlank())
             val generated = File(result.gcodePath)
             assertTrue("Native G-code is missing or empty", generated.isFile && generated.length() > 0)
+            val summary = GcodeValidator.summarizeParsedOutput(GcodeParser.parse(generated))
+            assertTrue("Slice must contain printable model extrusion", !GcodeValidator.isEffectivelyEmpty(summary))
             generated.copyTo(outputGcode)
             assertTrue("Captured G-code is empty", outputGcode.length() > 0)
 
@@ -77,6 +81,8 @@ class AndroidParityCaptureTest {
                 .put("inputSha256", inputHash)
                 .put("gcodeSha256", sha256(outputGcode))
                 .put("gcodeBytes", outputGcode.length())
+                .put("parsedLayerCount", summary.layerCount)
+                .put("modelExtrudeMoves", summary.modelExtrudeMoves)
                 .put("sliceConfig", serializedConfig)
                 .put("bundledProfileSha256", profileHashes)
                 .put("profileApplication", "raw STL; printer machine G-code in SliceConfig; no 3MF profile embed")

@@ -41,6 +41,8 @@ class ExportParityCaptureTest(unittest.TestCase):
             "inputSha256": sha(self.fixture.read_bytes()),
             "gcodeBytes": self.gcode.stat().st_size,
             "gcodeSha256": sha(self.gcode.read_bytes()),
+            "parsedLayerCount": 50,
+            "modelExtrudeMoves": 500,
             "sliceConfig": {"layerHeight": 0.2},
             "bundledProfileSha256": profiles,
         }
@@ -64,6 +66,12 @@ class ExportParityCaptureTest(unittest.TestCase):
         self.report["inputSha256"] = "0" * 64
         self.save_report()
         with self.assertRaisesRegex(ValueError, "input SHA-256"):
+            self.validate()
+
+    def test_capture_without_model_extrusion_fails(self):
+        self.report["modelExtrudeMoves"] = 0
+        self.save_report()
+        with self.assertRaisesRegex(ValueError, "printable model extrusion"):
             self.validate()
 
     def test_wrong_bundled_profile_hash_fails(self):

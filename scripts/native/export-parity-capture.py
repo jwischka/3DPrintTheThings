@@ -56,6 +56,9 @@ def validate_capture(gcode: Path, metadata: Path, fixture: Path = FIXTURE,
         raise ValueError("capture lacks device ABI provenance")
     if not isinstance(report.get("sliceConfig"), dict) or not report["sliceConfig"]:
         raise ValueError("capture lacks serialized SliceConfig")
+    for key in ("parsedLayerCount", "modelExtrudeMoves"):
+        if type(report.get(key)) is not int or report[key] <= 0:
+            raise ValueError("capture lacks printable model extrusion")
     if type(report.get("gcodeBytes")) is not int or report["gcodeBytes"] != gcode_size:
         raise ValueError("captured G-code byte count does not match provenance")
     if report.get("gcodeSha256") != digest(gcode):

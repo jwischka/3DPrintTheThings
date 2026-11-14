@@ -60,11 +60,21 @@ jobs:
           path: ${{ runner.temp }}/native-ccache-${{ matrix.abi }}
           key: native-ccache-ndk26-${{ matrix.abi }}-${{ steps.pin.outputs.sha }}-${{ github.run_id }}
           restore-keys: native-ccache-ndk26-${{ matrix.abi }}-${{ steps.pin.outputs.sha }}-
+      - name: Fetch pinned engine and prepare sources
+        env:
+          NATIVE_ENGINE_DIR: ${{ runner.temp }}/native-engine
+          NATIVE_DEPS_PREFIX: ${{ runner.temp }}/native-deps/prefix/${{ matrix.abi }}
+          NATIVE_EXTRA_DEPS_PREFIX: ${{ runner.temp }}/native-deps/extra/${{ matrix.abi }}
+          NATIVE_ENGINE_PREPARE_ONLY: '1'
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          bash scripts/native/build-engine.sh
       - name: Build and check experimental engine
         env:
           NATIVE_ENGINE_DIR: ${{ runner.temp }}/native-engine
           NATIVE_DEPS_PREFIX: ${{ runner.temp }}/native-deps/prefix/${{ matrix.abi }}
           NATIVE_EXTRA_DEPS_PREFIX: ${{ runner.temp }}/native-deps/extra/${{ matrix.abi }}
+          NATIVE_ENGINE_PREPARED: '1'
           CCACHE_DIR: ${{ runner.temp }}/native-ccache-${{ matrix.abi }}
           CCACHE_MAXSIZE: 2G
         run: |
@@ -149,7 +159,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Slice tetrahedron and capture cube output using the experimental x86 engine
+      - name: Exercise STL and dual-color 3MF slicing and capture cube output
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
