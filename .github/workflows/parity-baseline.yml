@@ -1,0 +1,66 @@
+name: Capture desktop Orca baseline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/parity-baseline.yml'
+      - 'tools/parity/**'
+
+jobs:
+  capture-u1-cube:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download pinned official OrcaSlicer CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.5.0/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.0.AppImage'
+          expected='d13eb0a9cd618ed080ab6b82c64c0a60c4501aac91e88d5ac2c3b526fb141a7c'
+          curl --fail --location --retry 3 "$url" -o orca.AppImage
+          echo "$expected  orca.AppImage" | sha256sum --check
+          chmod +x orca.AppImage
+          ./orca.AppImage --appimage-extract
+      - name: Fetch matching U1 profiles from official v2.5.0 source
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse --branch v2.5.0 \
+            https://github.com/OrcaSlicer/OrcaSlicer.git upstream-orca
+          git -C upstream-orca sparse-checkout set \
+            'resources/profiles/Snapmaker/machine' \
+            'resources/profiles/Snapmaker/process' \
+            'resources/profiles/Snapmaker/filament'
+      - name: Slice deterministic U1 fixture headlessly
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile=upstream-orca/resources/profiles/Snapmaker
+          machine="$profile/machine/Snapmaker U1 (0.4 nozzle).json"
+          process="$profile/process/0.20 Standard @Snapmaker U1 (0.4 nozzle).json"
+          filament="$profile/filament/Generic PLA @U1 0.4 nozzle.json"
+          mkdir -p parity-output
+          squashfs-root/AppRun tools/parity/fixtures/cube_10mm.stl \
+            --load-settings "$process;$machine" \
+            --load-filaments "$filament" \
+            --slice 0 --outputdir parity-output
+          gcode=$(find parity-output -type f -name '*.gcode' -print -quit)
+          test -n "$gcode"
+          input_hash=$(sha256sum tools/parity/fixtures/cube_10mm.stl | cut -d' ' -f1)
+          python tools/parity/parity.py capture "$gcode" parity-output/desktop-baseline.json \
+            --engine 'OrcaSlicer v2.5.0 (commit 40ecc66)' \
+            --preset 'Snapmaker U1 0.4 nozzle + 0.20 Standard + Generic PLA @U1; v2.5.0' \
+            --input-sha256 "$input_hash" \
+            --cli-command 'OrcaSlicer v2.5.0 --slice 0 --load-settings <process;machine> --load-filaments <filament>' \
+            --preset-file "$machine" --preset-file "$process" --preset-file "$filament"
+          python tools/parity/parity.py inspect "$gcode" > parity-output/desktop-gcode-metrics.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-orca-u1-cube-baseline-v2.5.0
+          path: parity-output/
+          if-no-files-found: error
+          retention-days: 30

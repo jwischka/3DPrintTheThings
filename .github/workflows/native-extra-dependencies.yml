@@ -1,0 +1,64 @@
+name: Experimental native extra dependencies
+
+on:
+  push:
+    paths:
+      - '.github/workflows/native-extra-dependencies.yml'
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Dependency component (all builds every extra library)'
+        type: choice
+        required: true
+        default: all
+        options: [nlopt, jpeg, libpng, openssl, all]
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    env:
+      ANDROID_ABI: ${{ matrix.abi }}
+      NATIVE_JOBS: '2'
+      NATIVE_COMPONENT: ${{ inputs.component || 'all' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'ndk;26.1.10909125'
+      - uses: actions/cache@v4
+        id: extra-cache
+        with:
+          path: ${{ runner.temp }}/native-deps/extra/${{ matrix.abi }}
+          key: native-extra-ndk26-${{ matrix.abi }}-${{ inputs.component || 'all' }}-${{ hashFiles('scripts/native/extra-sources.lock', 'scripts/native/build-extra-deps.sh', 'scripts/native/sources.lock', 'scripts/native/build-deps.sh') }}
+      - name: Build real native dependencies
+        if: steps.extra-cache.outputs.cache-hit != 'true'
+        env:
+          NATIVE_WORK_DIR: ${{ runner.temp }}/native-deps
+        run: |
+          set -o pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          mkdir -p native-extra-report
+          bash scripts/native/build-extra-deps.sh "$NATIVE_COMPONENT" 2>&1 | tee native-extra-report/build.log
+      - name: Record output checksums
+        env:
+          NATIVE_WORK_DIR: ${{ runner.temp }}/native-deps
+        run: |
+          mkdir -p native-extra-report
+          find "$NATIVE_WORK_DIR/extra/$ANDROID_ABI" -type f -name '*.a' -print0 | sort -z | xargs -0 -r sha256sum > native-extra-report/static-libraries.sha256
+          echo 'Extra dependency bundle only; no slicing engine was built.' | tee native-extra-report/status.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-extra-report-${{ matrix.abi }}-${{ inputs.component || 'all' }}
+          path: native-extra-report/
+          if-no-files-found: warn
