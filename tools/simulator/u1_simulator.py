@@ -6,6 +6,7 @@ import json
 import socket
 import threading
 import time
+from pathlib import Path
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,8 @@ MARKER = "3DPrintTheThings U1 simulator"
 API_KEY = "simulator-test-key"
 CONTROL_KEY = "simulator-control"
 MAX_UPLOAD = 8 * 1024 * 1024
+FIXTURE_SHA256 = "3bc24cffc43194b17e30507fc6fb06fb6c39bf239087f5c960c1dc9d9dd96e1a"
+FIXTURE_PATH = Path(__file__).resolve().parents[1] / "parity/fixtures/cube_10mm.stl"
 
 
 class State:
@@ -50,6 +53,9 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address, require_key=True):
         self.state = State()
         self.require_key = require_key
+        self.model_fixture = FIXTURE_PATH.read_bytes()
+        if not 0 < len(self.model_fixture) <= 1024 * 1024 or hashlib.sha256(self.model_fixture).hexdigest() != FIXTURE_SHA256:
+            raise ValueError("Pinned model fixture is missing or changed")
         super().__init__(address, Handler)
 
 
@@ -121,6 +127,20 @@ class Handler(BaseHTTPRequestHandler):
         state = self.server.state
         if parsed.path == "/__sim/info":
             return self.reply({"simulator": MARKER})
+        if parsed.path.startswith("/__sim/fixture/"):
+            if not self.allowed(control=True):
+                return
+            if parsed.path != "/__sim/fixture/cube_10mm.stl":
+                return self.reply({"error": "Unknown model fixture"}, 404)
+            data = self.server.model_fixture
+            self.send_response(200)
+            self.send_header("Content-Type", "model/stl")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+            self.close_connection = True
+            return
         if parsed.path == "/__sim/state":
             if self.allowed(control=True):
                 self.reply(state.snapshot())

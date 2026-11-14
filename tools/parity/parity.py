@@ -13,6 +13,18 @@ import re
 from pathlib import Path
 
 
+CONFIG_DIFF_LIST_LIMIT = 16
+IMPORTANT_CONFIG_KEYS = (
+    "gcode_flavor", "layer_height", "initial_layer_print_height", "first_layer_height",
+    "wall_loops", "sparse_infill_density", "outer_wall_speed", "inner_wall_speed",
+    "filament_type", "filament_settings_id", "filament_diameter", "filament_max_volumetric_speed",
+    "nozzle_diameter", "nozzle_temperature", "first_layer_temperature",
+    "bed_temperature", "first_layer_bed_temperature", "machine_start_gcode",
+    "machine_end_gcode", "extruder_count", "printer_model", "printer_settings_id",
+    "printable_area", "printable_height",
+)
+
+
 def analyze(path: Path) -> dict:
     config: dict[str, str] = {}
     in_config = False
@@ -177,7 +189,9 @@ def compare(expected: dict, actual: dict, *, extrusion_abs_mm: float = 0.1,
     errors = []
     for label, report in (("expected", expected), ("actual", actual)):
         errors.extend(validate_report(label, report))
-    for key in ("config", "layers", "tool_sequence"):
+    if expected.get("config") != actual.get("config"):
+        errors.append(format_config_diff(config_diff(expected.get("config", {}), actual.get("config", {}))))
+    for key in ("layers", "tool_sequence"):
         if expected.get(key) != actual.get(key):
             errors.append(f"{key}: expected {expected.get(key)!r}, got {actual.get(key)!r}")
     tools = sorted(set(expected.get("extrusion_mm_by_tool", {})) |
@@ -200,6 +214,66 @@ def compare(expected: dict, actual: dict, *, extrusion_abs_mm: float = 0.1,
         if abs(float(a) - float(b)) > tolerance:
             errors.append(f"duration: {a} vs {b} seconds")
     return errors
+
+
+def _short_value(value) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text if len(text) <= 96 else f"{text[:93]}..."
+
+
+def config_diff(expected, actual) -> dict:
+    """Summarize exact config differences without dumping the full CONFIG_BLOCK."""
+    expected = expected if isinstance(expected, dict) else {}
+    actual = actual if isinstance(actual, dict) else {}
+    expected_keys, actual_keys = set(expected), set(actual)
+    changed = sorted(key for key in expected_keys & actual_keys if expected[key] != actual[key])
+    missing_actual = sorted(expected_keys - actual_keys)
+    missing_expected = sorted(actual_keys - expected_keys)
+    important = {}
+    for key in IMPORTANT_CONFIG_KEYS:
+        if key in changed:
+            important[key] = {"expected": _short_value(expected[key]), "actual": _short_value(actual[key])}
+        elif key in missing_actual:
+            important[key] = {"expected": _short_value(expected[key]), "actual": "<missing>"}
+        elif key in missing_expected:
+            important[key] = {"expected": "<missing>", "actual": _short_value(actual[key])}
+    return {
+        "changed_count": len(changed),
+        "changed_keys": changed[:CONFIG_DIFF_LIST_LIMIT],
+        "changed_keys_omitted": max(0, len(changed) - CONFIG_DIFF_LIST_LIMIT),
+        "missing_in_actual_count": len(missing_actual),
+        "missing_in_actual": missing_actual[:CONFIG_DIFF_LIST_LIMIT],
+        "missing_in_actual_omitted": max(0, len(missing_actual) - CONFIG_DIFF_LIST_LIMIT),
+        "missing_in_expected_count": len(missing_expected),
+        "missing_in_expected": missing_expected[:CONFIG_DIFF_LIST_LIMIT],
+        "missing_in_expected_omitted": max(0, len(missing_expected) - CONFIG_DIFF_LIST_LIMIT),
+        "important_settings": important,
+    }
+
+
+def format_config_diff(diff: dict) -> str:
+    parts = [
+        "config mismatch: "
+        f"{diff['changed_count']} changed, "
+        f"{diff['missing_in_actual_count']} missing in actual, "
+        f"{diff['missing_in_expected_count']} missing in expected"
+    ]
+    important = diff["important_settings"]
+    if important:
+        details = ", ".join(
+            f"{key}={values['expected']!r} -> {values['actual']!r}"
+            for key, values in important.items()
+        )
+        parts.append("important: " + details)
+    for label, key in (("changed", "changed_keys"),
+                       ("missing in actual", "missing_in_actual"),
+                       ("missing in expected", "missing_in_expected")):
+        names = diff[key]
+        omitted = diff[key + "_omitted"]
+        if names:
+            suffix = f", ... (+{omitted})" if omitted else ""
+            parts.append(f"{label} keys: " + ", ".join(names) + suffix)
+    return "; ".join(parts)
 
 
 def validate_report(label: str, report: dict, *, reject_unsupported: bool = True) -> list[str]:
@@ -284,7 +358,14 @@ def main(argv=None) -> int:
                      extrusion_abs_mm=args.extrusion_abs_eps_mm,
                      duration_abs_seconds=args.duration_abs_eps_seconds)
     if args.json:
-        print(json.dumps({"expected": expected, "actual": actual, "errors": errors}, indent=2))
+        expected_summary = {key: value for key, value in expected.items() if key != "config"}
+        actual_summary = {key: value for key, value in actual.items() if key != "config"}
+        print(json.dumps({
+            "expected": expected_summary,
+            "actual": actual_summary,
+            "config_diff": config_diff(expected.get("config", {}), actual.get("config", {})),
+            "errors": errors,
+        }, indent=2))
     else:
         print("PARITY PASS" if not errors else "PARITY FAIL")
         for error in errors:

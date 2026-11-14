@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from http.client import HTTPConnection, RemoteDisconnected
 
-from u1_simulator import API_KEY, CONTROL_KEY, MARKER, MAX_UPLOAD, Server
+from u1_simulator import API_KEY, CONTROL_KEY, FIXTURE_SHA256, MARKER, MAX_UPLOAD, Server
 
 
 class SimulatorTest(unittest.TestCase):
@@ -46,6 +46,18 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(401, self.request("/server/info", headers={})[0])
         self.assertEqual(401, self.request("/__sim/configure", b"{}", headers={})[0])
         self.assertTrue(self.request("/server/info")[1]["result"]["klippy_connected"])
+
+    def test_pinned_model_fixture_is_bounded_and_requires_control_header(self):
+        path = "/__sim/fixture/cube_10mm.stl"
+        self.assertEqual(401, self.request(path, headers={})[0])
+        with urlopen(Request(self.base + path, headers={"X-Simulator-Control": CONTROL_KEY}), timeout=3) as reply:
+            content = reply.read()
+            self.assertEqual("model/stl", reply.headers["Content-Type"])
+            self.assertEqual(len(content), int(reply.headers["Content-Length"]))
+        self.assertEqual(FIXTURE_SHA256, hashlib.sha256(content).hexdigest())
+        self.assertLessEqual(len(content), 1024 * 1024)
+        self.assertEqual(404, self.request("/__sim/fixture/missing.stl",
+                                           headers={"X-Simulator-Control": CONTROL_KEY})[0])
 
     def test_upload_then_simulated_print_controls(self):
         self.assertEqual(404, self.request("/printer/print/start?filename=fixture.gcode", b"")[0])

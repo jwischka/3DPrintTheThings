@@ -1,16 +1,64 @@
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from collections import Counter
+from io import StringIO
 from pathlib import Path
 
-from parity import analyze, compare, load_report
+from parity import analyze, compare, config_diff, load_report, main
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class GcodeParityTest(unittest.TestCase):
+    def test_config_mismatch_reports_compact_changed_missing_and_important_settings(self):
+        expected = {
+            "gcode_flavor": "klipper", "layer_height": "0.2",
+            "machine_start_gcode": "START\n" * 100,
+            **{f"expected_{i}": str(i) for i in range(20)},
+        }
+        actual = {
+            "gcode_flavor": "marlin", "layer_height": "0.2",
+            **{f"actual_{i}": str(i) for i in range(20)},
+        }
+
+        diff = config_diff(expected, actual)
+        self.assertEqual(diff["changed_count"], 1)
+        self.assertEqual(diff["missing_in_actual_count"], 21)
+        self.assertEqual(diff["missing_in_expected_count"], 20)
+        self.assertEqual(diff["important_settings"]["gcode_flavor"],
+                         {"expected": "klipper", "actual": "marlin"})
+        self.assertEqual(diff["important_settings"]["machine_start_gcode"]["actual"], "<missing>")
+        self.assertEqual(len(diff["missing_in_actual"]), 16)
+        self.assertEqual(diff["missing_in_actual_omitted"], 5)
+
+        # Comparison remains strict: a diagnostic summary never turns a mismatch into a pass.
+        baseline = analyze(FIXTURES / "absolute.gcode")
+        candidate = dict(baseline, config=actual)
+        errors = compare(dict(baseline, config=expected), candidate)
+        self.assertTrue(any(error.startswith("config mismatch: 1 changed") for error in errors))
+
+    def test_json_compare_omits_full_config_maps(self):
+        baseline = analyze(FIXTURES / "absolute.gcode")
+        expected = dict(baseline, config={"gcode_flavor": "klipper", "large": "x" * 10000})
+        actual = dict(baseline, config={"gcode_flavor": "klipper", "large": "y" * 10000})
+        with tempfile.TemporaryDirectory() as directory:
+            expected_path = Path(directory) / "expected.json"
+            actual_path = Path(directory) / "actual.json"
+            expected_path.write_text(json.dumps(expected), encoding="utf-8")
+            actual_path.write_text(json.dumps(actual), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main(["compare", str(expected_path), str(actual_path), "--json"])
+
+        self.assertEqual(exit_code, 1)
+        rendered = output.getvalue()
+        self.assertIn('"config_diff"', rendered)
+        self.assertNotIn('"config": {', rendered)
+        self.assertLess(len(rendered), 5000)
+
     def test_cube_fixture_has_10mm_bounds_and_closed_triangles(self):
         vertices = []
         triangles = []

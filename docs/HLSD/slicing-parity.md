@@ -54,6 +54,13 @@ app's bundled profile assets are maintained separately from those desktop
 profiles, so their hashes and effective settings must be aligned before a
 cross-engine comparison can be interpreted.
 
+Comparison output summarizes changed and missing config keys instead of dumping
+both full dictionaries. Important setting values and bounded key lists make the
+remaining mismatches reviewable; omitted-key counts are explicit. JSON comparison
+output includes `config_diff` and omits raw config maps from its two summaries.
+The `inspect` and `capture` commands retain full config maps, and equality is
+still checked against every original setting before formatting the diagnostics.
+
 Fixtures cover absolute and relative extrusion, G90/G91 and M82/M83 modal
 commands, G92 E resets, retraction recovery, and tool changes. Extruder mode
 follows Klipper semantics for this U1 target: G90/G91 selects the coordinate

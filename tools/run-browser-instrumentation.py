@@ -8,16 +8,22 @@ from pathlib import Path
 
 
 TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest,com.u1.slicer.ui.LiveSpoolMappingInstrumentedTest,com.u1.slicer.library.LibraryScreenInstrumentedTest,com.u1.slicer.network.SimulatedU1InstrumentedTest,com.u1.slicer.LongOpServiceInstrumentedTest"
+EXPECTED_TESTS = None
 RUNNER = "io.github.jwischka.threedprintthethings.test/androidx.test.runner.AndroidJUnitRunner"
 
 
-def passed(output: str, returncode: int) -> bool:
+def passed(output: str, returncode: int, expected_tests: int | None = None) -> bool:
     if returncode != 0 or re.search(r"FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed|^INSTRUMENTATION_STATUS_CODE:\s*-[1234]\s*$|^INSTRUMENTATION_RESULT:\s*shortMsg=", output, re.IGNORECASE | re.MULTILINE):
         return False
     summary = re.search(r"\bOK\s*\(\s*(\d+)\s+tests?\s*\)", output)
     codes = re.findall(r"^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$", output, re.MULTILINE)
     statuses = re.findall(r"^INSTRUMENTATION_STATUS_CODE:\s*(-?\d+)\s*$", output, re.MULTILINE)
-    return bool(summary and int(summary.group(1)) > 0 and codes and codes[-1] == "-1" and "0" in statuses)
+    if not summary or not codes or codes[-1] != "-1":
+        return False
+    count = int(summary.group(1))
+    return (count > 0 and (expected_tests is None or count == expected_tests)
+            and statuses.count("1") == count and statuses.count("0") == count
+            and all(status in ("0", "1") for status in statuses))
 
 
 def main() -> int:
@@ -27,7 +33,10 @@ def main() -> int:
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--expected-tests", type=int, default=EXPECTED_TESTS)
     args = parser.parse_args()
+    if args.expected_tests is not None and args.expected_tests <= 0:
+        parser.error("--expected-tests must be positive")
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open("w", encoding="utf-8") as log:
         def capture_logcat() -> None:
@@ -60,8 +69,8 @@ def main() -> int:
                 if result.returncode != 0 or "Success" not in result.stdout:
                     return 1
             result = run([args.adb, "shell", "am", "instrument", "-w", "-r", "-e", "class", TEST_CLASS, RUNNER], args.timeout)
-            if not passed(result.stdout, result.returncode):
-                log.write("Instrumentation failed or did not report a positive test count.\n")
+            if not passed(result.stdout, result.returncode, args.expected_tests):
+                log.write("Instrumentation failed or its completed test counts did not match.\n")
                 capture_logcat()
                 return 1
             return 0

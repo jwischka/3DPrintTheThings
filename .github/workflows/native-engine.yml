@@ -11,6 +11,10 @@ on:
       - 'scripts/native/export-parity-capture.py'
       - 'scripts/native/tests/**'
       - 'app/src/androidTest/java/com/u1/slicer/slicing/AndroidParityCaptureTest.kt'
+      - 'app/src/androidTest/java/com/u1/slicer/slicing/NativeContractInstrumentedTest.kt'
+      - 'app/src/androidTest/java/com/u1/slicer/printer/DownloadSliceUploadInstrumentedTest.kt'
+      - 'tools/run-browser-instrumentation.py'
+      - 'tools/simulator/**'
       - 'tools/parity/fixtures/cube_10mm.stl'
       - 'scripts/native/sources.lock'
       - 'scripts/native/build-deps.sh'
@@ -159,6 +163,17 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Test and start the isolated U1 simulator
+        run: |
+          python3 -m unittest discover -s tools/simulator -v
+          python3 tools/simulator/u1_simulator.py --host 0.0.0.0 --allow-remote > "$RUNNER_TEMP/u1-simulator.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/u1-simulator.pid"
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18725/__sim/info; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/u1-simulator.log"
+          exit 1
       - name: Exercise STL and dual-color 3MF slicing and capture cube output
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -172,9 +187,15 @@ jobs:
             python3 scripts/native/export-parity-capture.py --output native-slice-report/cube
             python3 tools/parity/parity.py inspect native-slice-report/cube/cube_10mm.android.gcode > native-slice-report/cube/metrics.json
             cp "$RUNNER_TEMP/native-engine-x86/sha256.txt" native-slice-report/engine-sha256.txt
+      - name: Stop simulator and retain diagnostics
+        if: always()
+        run: |
+          mkdir -p native-slice-report
+          if [ -f "$RUNNER_TEMP/u1-simulator.log" ]; then cp "$RUNNER_TEMP/u1-simulator.log" native-slice-report/; fi
+          if [ -f "$RUNNER_TEMP/u1-simulator.pid" ]; then kill "$(cat "$RUNNER_TEMP/u1-simulator.pid")" || true; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: experimental-native-slice-smoke-log
+          name: experimental-native-slice-smoke-log-attempt-${{ github.run_attempt }}
           path: native-slice-report/
           if-no-files-found: warn
