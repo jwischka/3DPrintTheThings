@@ -2,6 +2,7 @@ package com.u1.slicer.printer
 
 import com.u1.slicer.network.FilamentSlot
 import com.u1.slicer.network.MoonrakerClient
+import com.u1.slicer.network.MoonrakerUploadResult
 import com.u1.slicer.network.PrinterStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -107,8 +108,16 @@ class MoonrakerTransport(
     }
 
     override suspend fun uploadJob(file: File, remoteName: String): TransportCommandResult =
-        if (client.uploadGcode(file, remoteName)) TransportCommandResult.Success
-        else TransportCommandResult.Failure("Upload failed")
+        uploadJob(file, remoteName) { _, _ -> }
+
+    override suspend fun uploadJob(
+        file: File,
+        remoteName: String,
+        onProgress: (Long, Long) -> Unit,
+    ): TransportCommandResult = when (val result = client.uploadGcodeResult(file, remoteName, onProgress)) {
+        MoonrakerUploadResult.Success -> TransportCommandResult.Success
+        is MoonrakerUploadResult.Failure -> TransportCommandResult.Failure(result.message)
+    }
 
     override suspend fun startJob(remoteName: String): TransportCommandResult =
         if (client.startPrint(remoteName)) TransportCommandResult.Success

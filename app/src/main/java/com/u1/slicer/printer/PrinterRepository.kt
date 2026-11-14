@@ -206,10 +206,12 @@ class PrinterRepository(
         PrintProgressNotifier.clear(appContext)
     }
 
-    suspend fun uploadAndPrint(gcodeFile: java.io.File, filename: String): TransportCommandResult {
+    suspend fun uploadAndPrint(
+        gcodeFile: java.io.File, filename: String, onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): TransportCommandResult {
         val uploadName = buildPrinterUploadFilename(filename)
         val transport = currentTransport ?: return TransportCommandResult.Failure("No printer configured")
-        when (val uploaded = transport.uploadJob(gcodeFile, uploadName)) {
+        when (val uploaded = transport.uploadJob(gcodeFile, uploadName, onProgress)) {
             TransportCommandResult.Success -> Unit
             is TransportCommandResult.Unsupported -> return uploaded
             is TransportCommandResult.Failure -> return uploaded
@@ -228,9 +230,11 @@ class PrinterRepository(
         }
     }
 
-    suspend fun uploadOnly(gcodeFile: java.io.File, filename: String): TransportCommandResult {
+    suspend fun uploadOnly(
+        gcodeFile: java.io.File, filename: String, onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): TransportCommandResult {
         val uploadName = buildPrinterUploadFilename(filename)
-        return currentTransport?.uploadJob(gcodeFile, uploadName)
+        return currentTransport?.uploadJob(gcodeFile, uploadName, onProgress)
             ?: TransportCommandResult.Failure("No printer configured")
     }
 

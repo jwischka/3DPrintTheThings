@@ -3,6 +3,7 @@ package com.u1.slicer.browse
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.webkit.CookieManager
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -100,6 +101,52 @@ class SiteBrowserInstrumentedTest {
         assertFalse(temporary.get().exists())
     }
 
+    @Test fun contentDispositionDownloadUsesTargetCookiesAndUserAgentOnce() {
+        assertNetworkDownload("model", "fixture-model.stl")
+    }
+
+    @Test fun zipContentDispositionIsHandedOffAsZipOnce() {
+        assertNetworkDownload("zip", "fixture-bundle.zip")
+    }
+
+    private fun assertNetworkDownload(kind: String, expectedName: String) {
+        val downloads = AtomicInteger()
+        val result = AtomicReference<BrowserDownload.Network>()
+        val delivered = CountDownLatch(1)
+        val cookiesSet = CountDownLatch(2)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            CookieManager.getInstance().apply {
+                setCookie("https://fixture.test/", "fixture_cookie=fixture_value; Path=/; Secure") { cookiesSet.countDown() }
+                setCookie("https://evil.test/", "other_cookie=other_value; Path=/; Secure") { cookiesSet.countDown() }
+            }
+        }
+        assertTrue("Fixture cookies were not set", cookiesSet.await(10, TimeUnit.SECONDS))
+        composeRule.setContent {
+            SiteBrowserScreen(site = site, onDownload = { download ->
+                downloads.incrementAndGet()
+                if (download is BrowserDownload.Network) result.set(download)
+                delivered.countDown()
+            }, onBack = {}, requestInterceptor = ::fixtureResponse,
+                onWebViewCreated = browserView::set)
+        }
+        waitForBridge()
+        val view = browserView.get()
+        val userAgent = AtomicReference<String>()
+        composeRule.runOnUiThread { userAgent.set(view.settings.userAgentString) }
+        evaluate(view, "window.location.href = '/fixture-download?kind=$kind'; true")
+        assertTrue("Content-Disposition download was not handed off", delivered.await(10, TimeUnit.SECONDS))
+        composeRule.waitForIdle()
+        assertEquals(1, downloads.get())
+        val download = result.get()
+        assertTrue("Expected network download", download != null)
+        assertEquals("https://fixture.test/fixture-download?kind=$kind", download.url)
+        assertEquals(expectedName, download.fileName)
+        assertEquals("https://fixture.test/model/one", download.pageUrl)
+        assertEquals(userAgent.get(), download.userAgent)
+        assertTrue(download.cookie.orEmpty().contains("fixture_cookie=fixture_value"))
+        assertFalse(download.cookie.orEmpty().contains("other_cookie=other_value"))
+    }
+
     private fun waitForBridge() {
         composeRule.waitUntil(10_000) {
             val view = browserView.get() ?: return@waitUntil false
@@ -118,6 +165,14 @@ class SiteBrowserInstrumentedTest {
     }
 
     private fun fixtureResponse(request: WebResourceRequest): WebResourceResponse {
+        if (request.url.host == "fixture.test" && request.url.path == "/fixture-download") {
+            val filename = if (request.url.getQueryParameter("kind") == "zip") "fixture-bundle.zip" else "fixture-model.stl"
+            return WebResourceResponse(
+                "application/octet-stream", null, 200, "OK",
+                mapOf("Content-Disposition" to "attachment; filename=\"$filename\""),
+                ByteArrayInputStream("fixture".toByteArray()),
+            )
+        }
         val html = when (request.url.host to request.url.path) {
             "fixture.test" to "/model/one" -> MAIN_PAGE
             "fixture.test" to "/same" -> SAME_ORIGIN_FRAME

@@ -2,14 +2,21 @@ package com.u1.slicer.network
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
  * HTTP client for Moonraker API (Klipper web interface).
@@ -17,15 +24,9 @@ import java.util.concurrent.TimeUnit
  *
  * Ported from u1-slicer-bridge: moonraker.py
  */
-class MoonrakerClient {
+class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
     private val TAG = "MoonrakerClient"
     private val remoteScreenProber = RemoteScreenProber()
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
 
     var baseUrl: String = ""
         set(value) {
@@ -121,24 +122,25 @@ class MoonrakerClient {
     }
 
     companion object {
-        /** Normalizes a printer URL: adds http:// scheme and :7125 port if missing. */
+        private fun defaultClient() = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+
+        /** Bare HTTP printer hosts use 7125; explicit paths and HTTPS keep their normal ports. */
         fun normalizeUrl(raw: String): String {
-            var url = raw.trim()
-            if (url.isBlank()) return ""
-            // Add scheme if missing
-            if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                url = "http://$url"
-            }
-            // Add default Moonraker port if no port present
-            try {
-                val uri = java.net.URI(url)
-                if (uri.port == -1) {
-                    // Insert :7125 before any path
-                    val path = if (uri.rawPath.isNullOrEmpty()) "" else uri.rawPath
-                    url = "${uri.scheme}://${uri.host}:7125$path"
-                }
-            } catch (_: Exception) { /* keep as-is */ }
-            return url.trimEnd('/')
+            val value = raw.trim()
+            if (value.isEmpty()) return ""
+            val candidate = if (value.startsWith("http://", true) || value.startsWith("https://", true)) value else "http://$value"
+            val uri = runCatching { java.net.URI(candidate) }.getOrNull() ?: return ""
+            val parsed = candidate.toHttpUrlOrNull() ?: return ""
+            if (uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
+                uri.host == null || parsed.scheme !in setOf("http", "https")) return ""
+            val hasPath = !uri.rawPath.isNullOrEmpty() && uri.rawPath != "/"
+            if (uri.port != -1) return "${parsed.scheme}://${uri.rawAuthority}${parsed.encodedPath}".trimEnd('/')
+            val port = if (uri.port == -1 && parsed.scheme == "http" && !hasPath) 7125 else parsed.port
+            return parsed.newBuilder().port(port).build().toString().trimEnd('/')
         }
 
         /**
@@ -410,46 +412,107 @@ class MoonrakerClient {
         }
     }
 
-    /**
-     * Upload a G-code file to the printer.
-     */
-    suspend fun uploadGcode(file: File, filename: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val fileSizeMb = file.length() / (1024 * 1024)
-            val timeout = maxOf(30L, minOf(300L, fileSizeMb))
-
-            val uploadClient = client.newBuilder()
-                .writeTimeout(timeout, TimeUnit.SECONDS)
-                .readTimeout(timeout, TimeUnit.SECONDS)
+    /** Upload one request. Progress counts file bytes, not multipart framing. */
+    suspend fun uploadGcodeResult(
+        file: File,
+        filename: String,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): MoonrakerUploadResult {
+        if (!file.isFile || file.length() == 0L) return MoonrakerUploadResult.Failure("G-code file is empty or missing")
+        val total = file.length()
+        val fileSizeMb = total / (1024 * 1024)
+        val timeout = maxOf(30L, minOf(300L, fileSizeMb))
+        val uploadClient = client.newBuilder()
+            .writeTimeout(timeout, TimeUnit.SECONDS)
+            .readTimeout(timeout, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+        runCatching { onProgress(0, total) }
+        val sourceBody = file.asRequestBody("application/octet-stream".toMediaType())
+        val countingBody = object : RequestBody() {
+            override fun contentType() = sourceBody.contentType()
+            override fun contentLength() = total
+            override fun isOneShot() = true
+            override fun writeTo(sink: BufferedSink) {
+                var sent = 0L
+                val countingSink = object : ForwardingSink(sink) {
+                    override fun write(source: okio.Buffer, byteCount: Long) {
+                        super.write(source, byteCount)
+                        sent += byteCount
+                        runCatching { onProgress(sent.coerceAtMost(total), total) }
+                    }
+                }.buffer()
+                sourceBody.writeTo(countingSink)
+                countingSink.flush()
+            }
+        }
+        val request = try {
+            Request.Builder().url(url("/server/files/upload"))
+                .post(MultipartBody.Builder().setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, countingBody).build())
                 .build()
+        } catch (_: IllegalArgumentException) {
+            return MoonrakerUploadResult.Failure("Invalid printer URL")
+        }
+        return suspendCancellableCoroutine { continuation ->
+            val call = uploadClient.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) continuation.resume(
+                        MoonrakerUploadResult.Failure("Upload connection failed")
+                    )
+                }
 
-            val body = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("file", filename,
-                    file.asRequestBody("application/octet-stream".toMediaType()))
-                .build()
-
-            val request = Request.Builder()
-                .url(url("/server/files/upload"))
-                .post(body)
-                .build()
-
-            val response = uploadClient.newCall(request).execute()
-            val ok = response.isSuccessful
-            response.close()
-            Log.i(TAG, "Upload ${if (ok) "success" else "failed"}: $filename")
-            ok
-        } catch (e: Exception) {
-            Log.e(TAG, "Upload failed: ${e.message}")
-            false
+                override fun onResponse(call: Call, response: Response) {
+                    val result = try {
+                        response.use {
+                            val source = response.body?.source()
+                            val oversized = if (source != null) {
+                                source.request(4097)
+                                source.buffer.size > 4096L
+                            } else false
+                            val snippet = if (source != null) {
+                                source.buffer.clone().readUtf8(minOf(source.buffer.size, 4097L))
+                            } else ""
+                            val parsed = runCatching { JSONObject(snippet) }.getOrNull()
+                            val message = runCatching {
+                                parsed?.optJSONObject("error")?.optString("message")
+                                    ?: parsed?.optString("message")
+                            }.getOrNull()?.trim()?.replace(Regex("[\\p{Cntrl}]+"), " ")
+                                ?.take(300)?.takeIf { it.isNotBlank() }
+                            val confirmed = !oversized && parsed?.optJSONObject("result")?.let { result ->
+                                result.optJSONObject("item") != null || (result.has("path") && result.has("root"))
+                            } == true
+                            if (response.isSuccessful && confirmed && message == null) MoonrakerUploadResult.Success
+                            else if (response.isSuccessful) MoonrakerUploadResult.Failure("Could not confirm upload from printer")
+                            else MoonrakerUploadResult.Failure(
+                                "Upload failed (HTTP ${response.code})" + (if (message != null) ": $message" else "")
+                            )
+                        }
+                    } catch (_: IOException) {
+                        MoonrakerUploadResult.Failure("Upload response failed")
+                    }
+                    if (continuation.isActive) continuation.resume(result)
+                }
+            })
         }
     }
+
+    suspend fun uploadGcode(file: File, filename: String): Boolean =
+        uploadGcodeResult(file, filename) == MoonrakerUploadResult.Success
 
     /**
      * Start printing a previously uploaded file.
      */
     suspend fun startPrint(filename: String): Boolean = withContext(Dispatchers.IO) {
-        postCommand("/printer/print/start?filename=$filename")
+        val startUrl = runCatching {
+            url("/printer/print/start").toHttpUrlOrNull()?.newBuilder()
+                ?.addQueryParameter("filename", filename)?.build()?.toString()
+        }.getOrNull() ?: return@withContext false
+        postCommand(startUrl, absolute = true)
     }
 
     suspend fun pausePrint(): Boolean = withContext(Dispatchers.IO) {
@@ -538,10 +601,10 @@ class MoonrakerClient {
     suspend fun setHeaterTemperature(heater: String, targetC: Int): Boolean =
         sendGcode(buildSetHeaterGcode(heater, targetC))
 
-    private fun postCommand(path: String): Boolean {
+    private fun postCommand(path: String, absolute: Boolean = false): Boolean {
         return try {
             val request = Request.Builder()
-                .url(url(path))
+                .url(if (absolute) path else url(path))
                 .post(ByteArray(0).toRequestBody(null))
                 .build()
             val response = client.newCall(request).execute()

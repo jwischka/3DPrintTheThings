@@ -21,6 +21,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -117,6 +119,8 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
 
     private val _sendingState = MutableStateFlow<SendingState>(SendingState.Idle)
     val sendingState: StateFlow<SendingState> = _sendingState.asStateFlow()
+    private val _uploadProgress = UploadProgressTracker()
+    val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.progress
 
     // LED light state (null = unknown/not connected)
     private val _isLightOn = MutableStateFlow<Boolean?>(null)
@@ -561,6 +565,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
      * failure flips it to Error via [reportSendError].
      */
     fun beginSendPreparing() {
+        _uploadProgress.begin()
         preparedSendGeneration = activePrinterGeneration.get()
         _sendingState.value = SendingState.Preparing
     }
@@ -581,6 +586,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
      */
     fun sendAndPrint(physical: com.u1.slicer.gcode.PhysicalGcodePath, modelName: String? = null) {
         sendJob?.cancel()
+        val progressAttempt = _uploadProgress.begin()
         _sendingState.value = SendingState.Uploading
         val requestedGeneration = consumePreparedSendGeneration()
         sendJob = viewModelScope.launch(Dispatchers.IO) {
@@ -602,8 +608,14 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 // F84: prefer the original model name over the on-disk gcode name
                 // so the printer's file browser shows distinct, recognisable jobs.
                 val filename = PrinterRepository.resolveUploadBaseName(modelName, file.name)
-                val result = printerRepo.uploadAndPrint(file, filename)
+                val uploadContext = currentCoroutineContext()
+                val result = printerRepo.uploadAndPrint(file, filename) { sent, total ->
+                    if (uploadContext.isActive && actionContext.generation == activePrinterGeneration.get()) {
+                        _uploadProgress.report(progressAttempt, sent, total)
+                    }
+                }
                 if (!isCurrentPrinterAction(actionContext)) return@launch
+                _uploadProgress.finish(progressAttempt)
                 _sendingState.value = when (result) {
                     TransportCommandResult.Success -> SendingState.PrintStarted
                     is TransportCommandResult.Unsupported -> SendingState.Error(result.reason)
@@ -612,6 +624,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
             } catch (error: Exception) {
                 handleUnexpectedSendFailure(error, actionContext, "Printer upload failed")
             } finally {
+                _uploadProgress.finish(progressAttempt)
                 com.u1.slicer.LongOpService.stop(ctx)
             }
         }
@@ -623,6 +636,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
      */
     fun sendUploadOnly(physical: com.u1.slicer.gcode.PhysicalGcodePath, modelName: String? = null) {
         sendJob?.cancel()
+        val progressAttempt = _uploadProgress.begin()
         _sendingState.value = SendingState.Uploading
         val requestedGeneration = consumePreparedSendGeneration()
         sendJob = viewModelScope.launch(Dispatchers.IO) {
@@ -640,8 +654,14 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
                 val filename = PrinterRepository.resolveUploadBaseName(modelName, file.name)
-                val result = printerRepo.uploadOnly(file, filename)
+                val uploadContext = currentCoroutineContext()
+                val result = printerRepo.uploadOnly(file, filename) { sent, total ->
+                    if (uploadContext.isActive && actionContext.generation == activePrinterGeneration.get()) {
+                        _uploadProgress.report(progressAttempt, sent, total)
+                    }
+                }
                 if (!isCurrentPrinterAction(actionContext)) return@launch
+                _uploadProgress.finish(progressAttempt)
                 _sendingState.value = when (result) {
                     TransportCommandResult.Success -> SendingState.UploadComplete
                     is TransportCommandResult.Unsupported -> SendingState.Error(result.reason)
@@ -656,6 +676,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
             } catch (error: Exception) {
                 handleUnexpectedSendFailure(error, actionContext, "Bambu project upload failed")
             } finally {
+                _uploadProgress.finish(progressAttempt)
                 com.u1.slicer.LongOpService.stop(ctx)
             }
         }
@@ -812,6 +833,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         useAms: Boolean = true,
     ) {
         sendJob?.cancel()
+        _uploadProgress.begin()
         _sendingState.value = SendingState.Uploading
         val requestedGeneration = consumePreparedSendGeneration()
         sendJob = viewModelScope.launch(Dispatchers.IO) {
@@ -836,6 +858,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                     useAms = useAms,
                 )
                 if (!isCurrentPrinterAction(actionContext)) return@launch
+                _uploadProgress.begin()
                 _sendingState.value = when (result) {
                     TransportCommandResult.Success -> SendingState.PrintStarted
                     is TransportCommandResult.Unsupported -> SendingState.Error(result.reason)
@@ -851,6 +874,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
 
     fun sendBambuProjectUploadOnly(projectFile: File, modelName: String? = null) {
         sendJob?.cancel()
+        _uploadProgress.begin()
         _sendingState.value = SendingState.Uploading
         val requestedGeneration = consumePreparedSendGeneration()
         sendJob = viewModelScope.launch(Dispatchers.IO) {
@@ -869,6 +893,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 )
                 val result = printerRepo.uploadOnlyBambuProject(projectFile, filename)
                 if (!isCurrentPrinterAction(actionContext)) return@launch
+                _uploadProgress.begin()
                 _sendingState.value = when (result) {
                     TransportCommandResult.Success -> SendingState.UploadComplete
                     is TransportCommandResult.Unsupported -> SendingState.Error(result.reason)
@@ -955,6 +980,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         _connectionState.value = ConnectionState.Unknown
         _syncState.value = SyncState.Idle
         _sendingState.value = SendingState.Idle
+        _uploadProgress.begin()
         _remoteScreenAvailable.value = false
         _webcamCandidates.value = emptyList()
         _isLightOn.value = null

@@ -1,12 +1,25 @@
 package com.u1.slicer.network
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import okhttp3.OkHttpClient
+import okhttp3.EventListener
+import okhttp3.Call
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import java.io.File
+import java.io.IOException
+import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Tests for MoonrakerClient using MockWebServer.
@@ -54,7 +67,7 @@ class MoonrakerClientTest {
 
     @Test
     fun `normalizeUrl preserves https scheme`() {
-        assertEquals("https://printer.local:7125", MoonrakerClient.normalizeUrl("https://printer.local"))
+        assertEquals("https://printer.local", MoonrakerClient.normalizeUrl("https://printer.local"))
     }
 
     @Test
@@ -79,6 +92,122 @@ class MoonrakerClientTest {
         // Test the URL building logic without network calls
         val base = MoonrakerClient.normalizeUrl("192.168.1.100")
         assertEquals("http://192.168.1.100:7125/server/info", "$base/server/info")
+    }
+
+    @Test
+    fun `normalizeUrl preserves proxy prefix and rejects URL credentials`() {
+        assertEquals("http://printer.local/moonraker", MoonrakerClient.normalizeUrl("http://printer.local/moonraker"))
+        assertEquals("https://printer.local/moonraker", MoonrakerClient.normalizeUrl("https://printer.local/moonraker/"))
+        assertEquals("http://[::1]:7125", MoonrakerClient.normalizeUrl("[::1]"))
+        assertEquals("", MoonrakerClient.normalizeUrl("https://user:secret@printer.local"))
+        assertEquals("", MoonrakerClient.normalizeUrl("http://printer.local/?token=secret"))
+        val explicitDefaultPort = "http://printer.local:80"
+        assertEquals(explicitDefaultPort, MoonrakerClient.normalizeUrl(explicitDefaultPort))
+        assertEquals(explicitDefaultPort, MoonrakerClient.normalizeUrl(MoonrakerClient.normalizeUrl(explicitDefaultPort)))
+    }
+
+    @Test
+    fun `upload reports payload progress and Moonraker error`() = runBlocking {
+        val server = MockWebServer()
+        val file = File.createTempFile("moonraker-upload", ".gcode")
+        try {
+            file.writeBytes(ByteArray(32_768) { 'G'.code.toByte() })
+            server.enqueue(MockResponse().setResponseCode(403)
+                .setBody("""{"error":{"message":"API key required"}}"""))
+            server.start(InetAddress.getByName("127.0.0.1"), 0)
+            val client = MoonrakerClient(OkHttpClient()).apply { baseUrl = server.url("/proxy").toString() }
+            val progress = mutableListOf<Pair<Long, Long>>()
+            val result = client.uploadGcodeResult(file, "cube.gcode") { sent, total ->
+                synchronized(progress) { progress += sent to total }
+            }
+            assertEquals(MoonrakerUploadResult.Failure("Upload failed (HTTP 403): API key required"), result)
+            val request = server.takeRequest()
+            assertEquals("/proxy/server/files/upload", request.path)
+            assertTrue(request.body.readUtf8().contains("filename=\"cube.gcode\""))
+            assertTrue(progress.isNotEmpty())
+            assertEquals(file.length() to file.length(), progress.last())
+            assertTrue(progress.zipWithNext().all { (a, b) -> a.first <= b.first })
+        } finally {
+            file.delete()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `upload accepts confirmed result and rejects unconfirmed success`() = runBlocking {
+        val server = MockWebServer()
+        val file = File.createTempFile("moonraker-confirm", ".gcode")
+        try {
+            file.writeText("G1 X1")
+            server.enqueue(MockResponse().setBody("""{"result":{"item":{"path":"cube.gcode"},"action":"create"}}"""))
+            server.enqueue(MockResponse().setBody("<html>not Moonraker</html>"))
+            server.start(InetAddress.getByName("127.0.0.1"), 0)
+            val client = MoonrakerClient(OkHttpClient()).apply { baseUrl = server.url("/").toString() }
+            assertEquals(MoonrakerUploadResult.Success, client.uploadGcodeResult(file, "cube.gcode") { _, _ ->
+                error("UI progress observer failed")
+            })
+            assertEquals(MoonrakerUploadResult.Failure("Could not confirm upload from printer"),
+                client.uploadGcodeResult(file, "cube.gcode"))
+        } finally {
+            file.delete()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `upload does not follow a redirect or replay POST`() = runBlocking {
+        val server = MockWebServer()
+        val file = File.createTempFile("moonraker-redirect", ".gcode")
+        try {
+            file.writeText("G1 X1")
+            server.enqueue(MockResponse().setResponseCode(307).addHeader("Location", "/other"))
+            server.start(InetAddress.getByName("127.0.0.1"), 0)
+            val client = MoonrakerClient(OkHttpClient()).apply { baseUrl = server.url("/").toString() }
+            assertEquals(MoonrakerUploadResult.Failure("Upload failed (HTTP 307)"),
+                client.uploadGcodeResult(file, "cube.gcode"))
+            assertEquals(1, server.requestCount)
+        } finally {
+            file.delete()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `start print URL encodes remote filename`() = runBlocking {
+        val server = MockWebServer()
+        try {
+            server.enqueue(MockResponse().setBody("{}"))
+            server.start(InetAddress.getByName("127.0.0.1"), 0)
+            val client = MoonrakerClient(OkHttpClient()).apply { baseUrl = server.url("/proxy").toString() }
+            assertTrue(client.startPrint("cube & test.gcode"))
+            assertEquals("/proxy/printer/print/start?filename=cube%20%26%20test.gcode", server.takeRequest().path)
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun `cancel upload cancels one in-flight request`() = runBlocking {
+        val server = MockWebServer()
+        val file = File.createTempFile("moonraker-cancel", ".gcode")
+        try {
+            file.writeText("G1 X1")
+            server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE))
+            server.start(InetAddress.getByName("127.0.0.1"), 0)
+            val callEnded = CountDownLatch(1)
+            val http = OkHttpClient.Builder().eventListenerFactory {
+                object : EventListener() {
+                    override fun callFailed(call: Call, ioe: IOException) { callEnded.countDown() }
+                }
+            }.build()
+            val client = MoonrakerClient(http).apply { baseUrl = server.url("/").toString() }
+            val job = launch(Dispatchers.IO) { client.uploadGcodeResult(file, "cube.gcode") }
+            assertEquals("/server/files/upload", server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)?.path)
+            withTimeout(5_000) { job.cancelAndJoin() }
+            assertTrue("OkHttp call must end after cancellation", callEnded.await(5, TimeUnit.SECONDS))
+            assertEquals(1, server.requestCount)
+        } finally {
+            file.delete()
+            server.shutdown()
+        }
     }
 
     // --- FilamentSlot tests ---

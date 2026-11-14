@@ -59,6 +59,11 @@ interface PrinterTransport {
     suspend fun uploadJob(file: File, remoteName: String): TransportCommandResult =
         TransportCommandResult.Unsupported("Upload is not supported for this printer")
 
+    /** Payload bytes written; completion still requires the server's response. */
+    suspend fun uploadJob(
+        file: File, remoteName: String, onProgress: (Long, Long) -> Unit,
+    ): TransportCommandResult = uploadJob(file, remoteName)
+
     suspend fun validateStartProject(): TransportCommandResult = TransportCommandResult.Success
 
     suspend fun startJob(remoteName: String): TransportCommandResult =

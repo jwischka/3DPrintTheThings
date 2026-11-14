@@ -2,6 +2,8 @@ package com.u1.slicer.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.ui.res.stringResource
+import com.u1.slicer.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -82,6 +84,7 @@ fun PrinterScreen(
 ) {
     val status by viewModel.status.collectAsState()
     val sendingState by viewModel.sendingState.collectAsState()
+    val uploadProgress by viewModel.uploadProgress.collectAsState()
     val syncState by viewModel.syncState.collectAsState()
     val extruderPresets by viewModel.extruderPresets.collectAsState()
     val webcamCandidates by viewModel.webcamCandidates.collectAsState()
@@ -313,7 +316,15 @@ fun PrinterScreen(
                 ) {
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                        val progress = uploadProgress.takeIf {
+                            activePrinter?.kind == com.u1.slicer.data.PrinterKind.MOONRAKER
+                        }
+                        if (progress != null && !progress.awaitingResponse) {
+                            CircularProgressIndicator(progress = progress.fraction,
+                                modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                        } else {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                        }
                         Column {
                             Text(
                                 if (activePrinter?.kind == com.u1.slicer.data.PrinterKind.BAMBU_LAN) {
@@ -324,7 +335,11 @@ fun PrinterScreen(
                                 fontWeight = FontWeight.Medium,
                             )
                             Text(
-                                if (activePrinter?.kind == com.u1.slicer.data.PrinterKind.BAMBU_LAN) {
+                                if (progress?.awaitingResponse == true) {
+                                    stringResource(R.string.transfer_awaiting_response)
+                                } else if (progress != null) {
+                                    stringResource(R.string.transfer_upload_progress, (progress.fraction * 100).toInt())
+                                } else if (activePrinter?.kind == com.u1.slicer.data.PrinterKind.BAMBU_LAN) {
                                     "This may take a moment while the original 3MF is copied to printer storage"
                                 } else {
                                     "This may take a moment for large files"

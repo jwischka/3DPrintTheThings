@@ -1,0 +1,4 @@
+<resources>
+    <string name="transfer_upload_progress">Sending file: %1$d%%</string>
+    <string name="transfer_awaiting_response">File sent; waiting for the printer to confirm</string>
+</resources>
