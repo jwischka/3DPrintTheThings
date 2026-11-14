@@ -30,6 +30,15 @@ def main() -> int:
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open("w", encoding="utf-8") as log:
+        def capture_logcat() -> None:
+            try:
+                result = subprocess.run([args.adb, "logcat", "-d", "-t", "2000"],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        timeout=15)
+                args.log.with_name(args.log.stem + "-logcat.log").write_bytes(result.stdout[:2 * 1024 * 1024])
+            except (OSError, subprocess.TimeoutExpired):
+                log.write("Unable to collect bounded logcat.\n")
+
         def run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
             log.write("$ " + " ".join(command) + "\n")
             log.flush()
@@ -53,10 +62,12 @@ def main() -> int:
             result = run([args.adb, "shell", "am", "instrument", "-w", "-r", "-e", "class", TEST_CLASS, RUNNER], args.timeout)
             if not passed(result.stdout, result.returncode):
                 log.write("Instrumentation failed or did not report a positive test count.\n")
+                capture_logcat()
                 return 1
             return 0
         except (OSError, subprocess.TimeoutExpired) as exc:
             log.write(f"Unable to complete browser instrumentation: {exc}\n")
+            capture_logcat()
             return 1
 
 
