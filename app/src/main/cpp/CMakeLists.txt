@@ -21,6 +21,16 @@ message(STATUS "SLICER_BACKEND=${SLICER_BACKEND}")
 # dependency bundle while compiling the worktree's own native sources.
 set(EXTERN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern" CACHE PATH "Prebuilt Android dependency root")
 set(ABI_DIR "${ANDROID_ABI}")
+set(NATIVE_EXTRA_DEPS_ROOT "" CACHE PATH "Optional real NLopt, JPEG, PNG, crypto and libnoise dependency root")
+if(NATIVE_EXTRA_DEPS_ROOT)
+    foreach(dependency nlopt jpeg libpng openssl libnoise)
+        include_directories(BEFORE "${NATIVE_EXTRA_DEPS_ROOT}/${dependency}/include")
+        link_directories("${NATIVE_EXTRA_DEPS_ROOT}/${dependency}/lib")
+    endforeach()
+    set(NATIVE_EXTRA_LIBS nlopt jpeg png16 crypto libnoise_static ${CMAKE_DL_LIBS})
+    add_compile_definitions(SLIC3R_NATIVE_REAL_PNG=1)
+    add_compile_definitions(SLIC3R_NATIVE_REAL_FUZZY_SKIN=1)
+endif()
 
 if(SLICER_BACKEND STREQUAL "orca")
     set(PRUSA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/orcaslicer")
@@ -161,7 +171,7 @@ set(BOOST_ROOT "${EXTERN_DIR}/boost")
 include_directories("${BOOST_ROOT}/include")
 link_directories("${BOOST_ROOT}/lib/${ABI_DIR}")
 # Note: Boost-for-Android uses custom suffixes for the .a files
-set(BOOST_SUFFIX "-clang-mt-a64-1_84")
+set(BOOST_SUFFIX "-clang-mt-a64-1_84" CACHE STRING "Suffix used by the selected Boost static libraries")
 set(BOOST_LIBS
     "boost_log_setup${BOOST_SUFFIX}"
     "boost_log${BOOST_SUFFIX}"
@@ -766,7 +776,7 @@ if(SLICER_BACKEND STREQUAL "orca")
         ${LIBSLIC3R_DIR}/calib.cpp
         ${LIBSLIC3R_DIR}/Feature/Interlocking/InterlockingGenerator.cpp
         ${LIBSLIC3R_DIR}/Feature/Interlocking/VoxelUtils.cpp
-        # FuzzySkin/FuzzySkin.cpp excluded — requires libnoise (not available on Android)
+        # FuzzySkin is added below when the real libnoise dependency is available.
     )
 else()
     # PrusaSlicer source list (unchanged from original)
@@ -1028,6 +1038,12 @@ if(SLICER_BACKEND STREQUAL "orca")
         ${CMAKE_CURRENT_SOURCE_DIR}/src/boost_locale_stub.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/nanosvg_impl.c
     )
+    if(NATIVE_EXTRA_DEPS_ROOT)
+        list(APPEND LIBSLIC3R_CORE_SOURCES
+            ${LIBSLIC3R_DIR}/PNGReadWrite.cpp
+            ${LIBSLIC3R_DIR}/Feature/FuzzySkin/FuzzySkin.cpp
+        )
+    endif()
 endif()
 
 add_library(libslic3r STATIC ${LIBSLIC3R_CORE_SOURCES})
@@ -1067,6 +1083,7 @@ if(SLICER_BACKEND STREQUAL "orca")
         agg
         nanosvg
         # External libs
+        ${NATIVE_EXTRA_LIBS}
         ${BOOST_LIBS}
         ${OCCT_LIBS}
         tbb

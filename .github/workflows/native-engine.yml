@@ -1,0 +1,160 @@
+name: Experimental native engine build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/native-engine.yml'
+      - 'scripts/native/build-engine.sh'
+      - 'scripts/native/prepare-emulator-apk.py'
+      - 'scripts/native/run-native-instrumentation.py'
+      - 'scripts/native/sources.lock'
+      - 'scripts/native/build-deps.sh'
+      - 'scripts/native/extra-sources.lock'
+      - 'scripts/native/build-extra-deps.sh'
+      - 'app/src/main/cpp/**'
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    env:
+      ANDROID_ABI: ${{ matrix.abi }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'ndk;26.1.10909125'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/native-deps/prefix/${{ matrix.abi }}
+          key: native-deps-ndk26-${{ matrix.abi }}-all-${{ hashFiles('scripts/native/sources.lock', 'scripts/native/build-deps.sh') }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/native-deps/extra/${{ matrix.abi }}
+          key: native-extra-ndk26-${{ matrix.abi }}-all-${{ hashFiles('scripts/native/extra-sources.lock', 'scripts/native/build-extra-deps.sh', 'scripts/native/sources.lock', 'scripts/native/build-deps.sh') }}
+          fail-on-cache-miss: true
+      - name: Install compiler cache and record engine pin
+        id: pin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          echo "sha=$(git ls-tree HEAD app/src/main/cpp/orcaslicer | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/native-ccache-$ANDROID_ABI"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/native-ccache-${{ matrix.abi }}
+          key: native-ccache-ndk26-${{ matrix.abi }}-${{ steps.pin.outputs.sha }}-${{ github.run_id }}
+          restore-keys: native-ccache-ndk26-${{ matrix.abi }}-${{ steps.pin.outputs.sha }}-
+      - name: Build and check experimental engine
+        env:
+          NATIVE_ENGINE_DIR: ${{ runner.temp }}/native-engine
+          NATIVE_DEPS_PREFIX: ${{ runner.temp }}/native-deps/prefix/${{ matrix.abi }}
+          NATIVE_EXTRA_DEPS_PREFIX: ${{ runner.temp }}/native-deps/extra/${{ matrix.abi }}
+          CCACHE_DIR: ${{ runner.temp }}/native-ccache-${{ matrix.abi }}
+          CCACHE_MAXSIZE: 2G
+        run: |
+          set -o pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          mkdir -p native-engine-report
+          bash scripts/native/build-engine.sh 2>&1 | tee native-engine-report/build.log
+      - uses: actions/cache/save@v4
+        if: always() && steps.pin.outcome == 'success'
+        with:
+          path: ${{ runner.temp }}/native-ccache-${{ matrix.abi }}
+          key: native-ccache-ndk26-${{ matrix.abi }}-${{ steps.pin.outputs.sha }}-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-engine-report-${{ matrix.abi }}
+          path: native-engine-report/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: experimental-native-engine-${{ matrix.abi }}
+          path: ${{ runner.temp }}/native-engine/output/
+
+  x86-slice-smoke:
+    needs: engine
+    # An arm64 compile failure must not suppress a successfully built x86 smoke test.
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: experimental-native-engine-x86_64
+          path: ${{ runner.temp }}/native-engine-x86
+      - name: Create ephemeral debug signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android \
+              -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname 'CN=Android Debug,O=Android,C=US'
+          fi
+      - name: Build original test APKs
+        run: >-
+          ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --no-build-cache --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" -Pkotlin.daemon.jvmargs=-Xmx3g
+      - name: Prepare isolated x86_64 test APKs
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-test"
+          signer="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          align="$ANDROID_HOME/build-tools/34.0.0/zipalign"
+          python3 scripts/native/prepare-emulator-apk.py \
+            --input app/build/outputs/apk/debug/app-debug.apk \
+            --engine-dir "$RUNNER_TEMP/native-engine-x86" --output "$RUNNER_TEMP/native-test/app-x86.apk" \
+            --keystore "$HOME/.android/debug.keystore" --zipalign "$align" --apksigner "$signer"
+          python3 tools/prepare-ui-test-apk.py \
+            --input app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --output "$RUNNER_TEMP/native-test/test-x86.apk" \
+            --keystore "$HOME/.android/debug.keystore" --zipalign "$align" --apksigner "$signer"
+          app_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/app-x86.apk" | grep 'Signer #1 certificate SHA-256 digest:')
+          test_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/test-x86.apk" | grep 'Signer #1 certificate SHA-256 digest:')
+          test -n "$app_cert" && test "$app_cert" = "$test_cert"
+      - name: Enable KVM on the ephemeral runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Slice a bundled tetrahedron using the experimental x86 engine
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: >-
+            python3 scripts/native/run-native-instrumentation.py
+            --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk"
+            --log native-slice-report/instrumentation.log --timeout 600
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: experimental-native-slice-smoke-log
+          path: native-slice-report/
+          if-no-files-found: warn
