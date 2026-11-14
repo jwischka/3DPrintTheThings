@@ -44,6 +44,15 @@ data class DownloadEntry(
 
 data class DownloadListing(val entries: List<DownloadEntry>, val unreadableEntries: Int)
 
+/** Safe metadata for a lost or truncated model; deliberately cannot be passed to fileFor/open. */
+data class RecoverableDownload(
+    val sha256: String,
+    val fileName: String,
+    val sizeBytes: Long,
+    val createdAtMillis: Long,
+    val provenance: DownloadProvenance,
+)
+
 /** Stores model bytes under filesDir/downloads/<sha256>/ with a small atomic JSON index per file. */
 class DownloadStore(
     filesDir: File,
@@ -213,6 +222,38 @@ class DownloadStore(
         mutex.withLock { scanEntries(strict = false) }
     }
 
+    suspend fun recoverableDownloads(): List<RecoverableDownload> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (!root.exists()) return@withLock emptyList()
+            if (root.canonicalFile != root.absoluteFile) throw IOException("Download root is a symbolic link")
+            val directories = root.listFiles() ?: throw IOException("Cannot read downloads directory")
+            directories.mapNotNull { directory ->
+                if (!HASH_PATTERN.matches(directory.name) || !directory.isDirectory) return@mapNotNull null
+                val entry = try { readMetadata(directory) } catch (_: IOException) { null } ?: return@mapNotNull null
+                val file = try { fileFor(entry) } catch (_: IOException) { null } ?: return@mapNotNull null
+                if (file.isFile && file.length() == entry.sizeBytes) null
+                else RecoverableDownload(entry.sha256, entry.fileName, entry.sizeBytes,
+                    entry.createdAtMillis, entry.provenance)
+            }.sortedByDescending { it.createdAtMillis }
+        }
+    }
+
+    suspend fun forgetRecoverable(recoverable: RecoverableDownload): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (!HASH_PATTERN.matches(recoverable.sha256)) return@withLock false
+            val directory = File(root, recoverable.sha256)
+            val entry = try { readMetadata(directory) } catch (_: IOException) { null } ?: return@withLock false
+            if (recoverable != RecoverableDownload(entry.sha256, entry.fileName, entry.sizeBytes,
+                    entry.createdAtMillis, entry.provenance)) return@withLock false
+            val file = try { fileFor(entry) } catch (_: IOException) { null } ?: return@withLock false
+            if (file.isFile && file.length() == entry.sizeBytes) return@withLock false
+            if (file.exists() && !file.delete()) return@withLock false
+            if (!File(directory, INDEX_FILE).delete()) return@withLock false
+            directory.delete()
+            true
+        }
+    }
+
     suspend fun entry(hash: String): DownloadEntry? = withContext(Dispatchers.IO) {
         if (!HASH_PATTERN.matches(hash)) throw IOException("Invalid download hash")
         mutex.withLock { readEntry(File(root, hash)) }
@@ -287,6 +328,15 @@ class DownloadStore(
     }
 
     private fun readEntry(directory: File): DownloadEntry? {
+        val entry = readMetadata(directory) ?: return null
+        val file = fileFor(entry)
+        if (!file.isFile || file.length() != entry.sizeBytes) {
+            throw IOException("Download metadata does not match its file")
+        }
+        return entry
+    }
+
+    private fun readMetadata(directory: File): DownloadEntry? {
         if (!directory.exists()) return null
         if (directory.canonicalFile != directory.absoluteFile) throw IOException("Download directory is a symbolic link")
         val files = directory.listFiles() ?: throw IOException("Cannot read download directory")
@@ -305,10 +355,8 @@ class DownloadStore(
                     p.optStringOrNull("author"), p.optStringOrNull("license"), p.optStringOrNull("thumbnailUrl"),
                 )),
             )
-            val file = fileFor(entry)
-            if (entry.sha256 != directory.name || !file.isFile || file.length() != entry.sizeBytes) {
-                throw IOException("Download metadata does not match its file")
-            }
+            if (entry.sha256 != directory.name || entry.sizeBytes <= 0) throw IOException("Invalid download metadata")
+            fileFor(entry)
             entry
         } catch (e: org.json.JSONException) {
             throw IOException("Invalid download metadata", e)

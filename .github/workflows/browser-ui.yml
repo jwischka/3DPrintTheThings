@@ -1,4 +1,4 @@
-name: Browser UI instrumentation
+name: Android UI and simulator instrumentation
 
 on:
   push:
@@ -69,7 +69,18 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Run only browser UI instrumentation
+      - name: Test and start the isolated U1 simulator
+        run: |
+          python3 -m unittest discover -s tools/simulator -v
+          python3 tools/simulator/u1_simulator.py --host 0.0.0.0 --allow-remote > "$RUNNER_TEMP/u1-simulator.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/u1-simulator.pid"
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18725/__sim/info; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/u1-simulator.log"
+          exit 1
+      - name: Run isolated UI and simulated-printer instrumentation
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -82,6 +93,12 @@ jobs:
             --app "$RUNNER_TEMP/browser-ui/app-ui-only.apk"
             --test "$RUNNER_TEMP/browser-ui/androidTest-ui-only.apk"
             --log browser-ui-results/instrumentation.log --timeout 300
+      - name: Stop simulator and retain diagnostics
+        if: always()
+        run: |
+          mkdir -p browser-ui-results
+          if [ -f "$RUNNER_TEMP/u1-simulator.log" ]; then cp "$RUNNER_TEMP/u1-simulator.log" browser-ui-results/; fi
+          if [ -f "$RUNNER_TEMP/u1-simulator.pid" ]; then kill "$(cat "$RUNNER_TEMP/u1-simulator.pid")" || true; fi
       - name: Upload browser UI logs
         if: always()
         uses: actions/upload-artifact@v4

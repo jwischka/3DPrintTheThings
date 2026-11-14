@@ -242,6 +242,11 @@ fun U1NavGraph(
                 store = container.downloadStore,
                 onOpen = ::openDownloaded,
                 onBack = { navController.popBackStack() },
+                onRetryFromSource = { url ->
+                    val site = ModelSites.forUrl(url)
+                    if (site != null) navController.navigate(Routes.siteBrowser(site.id, url))
+                    else com.u1.slicer.browse.openExternalBrowser(navController.context, url)
+                },
             )
         }
         composable(Routes.MAKERWORLD_BROWSER) {
