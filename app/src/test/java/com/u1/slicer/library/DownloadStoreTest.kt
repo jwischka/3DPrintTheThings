@@ -92,11 +92,58 @@ class DownloadStoreTest {
         metadata.writeText("""{"sha256":"${entry.sha256}","fileName":"../bad.stl","sizeBytes":5,"createdAtMillis":1,"provenance":{"site":"printables","pageUrl":"https://example.com/","title":"Model"}}""")
         assertThrows(IOException::class.java) { runBlocking { store.entries() } }
         assertTrue(store.fileFor(entry).isFile)
+
+        for (page in listOf("", "javascript:alert(1)")) {
+            metadata.writeText("""{"sha256":"${entry.sha256}","fileName":"model.stl","sizeBytes":5,"createdAtMillis":1,"provenance":{"site":"printables","pageUrl":"$page","title":"Model"}}""")
+            assertThrows(IOException::class.java) { runBlocking { store.entries() } }
+        }
+        assertTrue(store.fileFor(entry).isFile)
     }
 
     @Test fun nonDirectoryLibraryRootIsReported() {
         File(filesDir, "downloads").writeText("not a directory")
         assertThrows(IOException::class.java) { runBlocking { store.entries() } }
+    }
+
+    @Test fun listingKeepsValidEntriesWhenAnotherIndexIsCorrupt() = runBlocking<Unit> {
+        val goodSource = temporaryFolder.newFile("good.stl").apply { writeText("good model") }
+        val badSource = temporaryFolder.newFile("bad.stl").apply { writeText("other model") }
+        val good = store.importFile(goodSource, "good.stl", provenance)
+        val bad = store.importFile(badSource, "bad.stl", provenance)
+        File(filesDir, "downloads/${bad.sha256}/metadata.json").writeText("{")
+
+        assertEquals(DownloadListing(listOf(good), 1), store.listing())
+        assertThrows(IOException::class.java) { runBlocking { store.entries() } }
+        assertEquals(good, store.entry(good.sha256))
+        assertThrows(IOException::class.java) { runBlocking { store.entry(bad.sha256) } }
+        assertThrows(IOException::class.java) { runBlocking { store.entry("../invalid") } }
+        assertTrue(store.fileFor(good).isFile)
+        assertTrue(File(filesDir, "downloads/${bad.sha256}/bad.stl").isFile)
+    }
+
+    @Test fun localImportDeduplicatesAndPreservesSource() = runBlocking<Unit> {
+        val source = temporaryFolder.newFile("source.stl")
+        source.writeText("same model")
+        val local = DownloadProvenance("local", "", "Local model")
+        val first = store.importFile(source, "first.stl", local)
+        assertEquals(local, DownloadStore(filesDir, OkHttpClient()).entries().single().provenance)
+        server.enqueue(MockResponse().setBody("same model"))
+        val second = store.download(url("/same").toString(), "second.stl", provenance)
+        assertEquals(first, second)
+        assertEquals("same model", source.readText())
+        assertEquals(listOf(first), store.entries())
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { store.importFile(source, "other.stl", provenance.copy(pageUrl = "")) }
+        }
+    }
+
+    @Test fun oversizedLocalImportKeepsSourceAndCleansPartial() {
+        val source = temporaryFolder.newFile("large.stl")
+        source.writeText("12345")
+        val small = DownloadStore(filesDir, OkHttpClient(), maxBytes = 4)
+        assertThrows(IOException::class.java) { runBlocking { small.importFile(source, source.name, provenance) } }
+        assertTrue(source.isFile)
+        assertTrue(File(filesDir, "downloads").listFiles().orEmpty().isEmpty())
     }
 
     @Test fun stripsTraversalFromIncomingFilenameAndRejectsForgedEntry() = runBlocking<Unit> {

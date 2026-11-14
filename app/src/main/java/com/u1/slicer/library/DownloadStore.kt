@@ -18,6 +18,7 @@ import okhttp3.Response
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -41,6 +42,8 @@ data class DownloadEntry(
     val provenance: DownloadProvenance,
 )
 
+data class DownloadListing(val entries: List<DownloadEntry>, val unreadableEntries: Int)
+
 /** Stores model bytes under filesDir/downloads/<sha256>/ with a small atomic JSON index per file. */
 class DownloadStore(
     filesDir: File,
@@ -62,10 +65,7 @@ class DownloadStore(
         headers: Map<String, String> = emptyMap(),
     ): DownloadEntry = withContext(Dispatchers.IO) {
         val safeName = safeFileName(filename)
-        val safeProvenance = provenance.copy(
-            pageUrl = publicUrl(provenance.pageUrl),
-            thumbnailUrl = provenance.thumbnailUrl?.let(::publicUrl),
-        )
+        val safeProvenance = normalizeProvenance(provenance)
         val parsedUrl = url.toHttpUrlOrNull() ?: throw IOException("Invalid download URL")
         if (parsedUrl.scheme !in listOf("http", "https")) throw IOException("Unsupported download URL")
         root.mkdirs()
@@ -106,6 +106,23 @@ class DownloadStore(
         data class Redirect(val location: String) : FetchResult()
         data class Saved(val sha256: String, val sizeBytes: Long) : FetchResult()
     }
+
+    /** Import local bytes without modifying the source; commit uses the same index and deduplication as downloads. */
+    suspend fun importFile(file: File, filename: String, provenance: DownloadProvenance): DownloadEntry =
+        withContext(Dispatchers.IO) {
+            val safeName = safeFileName(filename)
+            val safeProvenance = normalizeProvenance(provenance)
+            if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create downloads directory")
+            val partial = File(root, ".partial-${UUID.randomUUID()}")
+            try {
+                val context = currentCoroutineContext()
+                val result = file.inputStream().use { copyModel(it, partial) { context.ensureActive() } }
+                val entry = DownloadEntry(result.sha256, safeName, result.sizeBytes, clockMillis(), safeProvenance)
+                mutex.withLock { commit(partial, entry) }
+            } finally {
+                partial.delete()
+            }
+        }
 
     private suspend fun fetch(url: okhttp3.HttpUrl, headers: Map<String, String>, partial: File): FetchResult {
         val request = Request.Builder().url(url).apply {
@@ -160,39 +177,62 @@ class DownloadStore(
         }
         val body = response.body ?: throw IOException("Download has no body")
         if (body.contentLength() > maxBytes) throw IOException("Download exceeds size limit")
+        val result = body.byteStream().use { copyModel(it, partial) {} }
+        if (body.contentLength() >= 0 && result.sizeBytes != body.contentLength()) throw IOException("Download is incomplete")
+        return result
+    }
+
+    private fun copyModel(input: InputStream, partial: File, checkActive: () -> Unit): FetchResult.Saved {
         val digest = MessageDigest.getInstance("SHA-256")
         var size = 0L
-        body.byteStream().use { input ->
-            partial.outputStream().use { output ->
-                val buffer = ByteArray(64 * 1024)
-                var firstChunk = true
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    if (firstChunk && looksLikeHtml(buffer, count)) throw IOException("Download returned HTML")
-                    firstChunk = false
-                    size += count
-                    if (size > maxBytes) throw IOException("Download exceeds size limit")
-                    digest.update(buffer, 0, count)
-                    output.write(buffer, 0, count)
-                }
+        partial.outputStream().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            var firstChunk = true
+            while (true) {
+                checkActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (firstChunk && looksLikeHtml(buffer, count)) throw IOException("Download returned HTML")
+                firstChunk = false
+                size += count
+                if (size > maxBytes) throw IOException("Download exceeds size limit")
+                digest.update(buffer, 0, count)
+                output.write(buffer, 0, count)
             }
         }
         if (size == 0L) throw IOException("Download is empty")
-        if (body.contentLength() >= 0 && size != body.contentLength()) throw IOException("Download is incomplete")
         val hash = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         return FetchResult.Saved(hash, size)
     }
 
     suspend fun entries(): List<DownloadEntry> = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            if (!root.exists()) return@withLock emptyList()
-            val directories = root.listFiles() ?: throw IOException("Cannot read downloads directory")
-            directories.mapNotNull { directory ->
-                if (!directory.isDirectory || !HASH_PATTERN.matches(directory.name)) return@mapNotNull null
-                readEntry(directory)
-            }.sortedByDescending { it.createdAtMillis }
+        mutex.withLock { scanEntries(strict = true).entries }
+    }
+
+    suspend fun listing(): DownloadListing = withContext(Dispatchers.IO) {
+        mutex.withLock { scanEntries(strict = false) }
+    }
+
+    suspend fun entry(hash: String): DownloadEntry? = withContext(Dispatchers.IO) {
+        if (!HASH_PATTERN.matches(hash)) throw IOException("Invalid download hash")
+        mutex.withLock { readEntry(File(root, hash)) }
+    }
+
+    private fun scanEntries(strict: Boolean): DownloadListing {
+        if (!root.exists()) return DownloadListing(emptyList(), 0)
+        val directories = root.listFiles() ?: throw IOException("Cannot read downloads directory")
+        val entries = mutableListOf<DownloadEntry>()
+        var unreadable = 0
+        directories.forEach { directory ->
+            if (!directory.isDirectory || !HASH_PATTERN.matches(directory.name)) return@forEach
+            try {
+                readEntry(directory)?.let(entries::add)
+            } catch (e: IOException) {
+                if (strict) throw e
+                unreadable++
+            }
         }
+        return DownloadListing(entries.sortedByDescending { it.createdAtMillis }, unreadable)
     }
 
     fun fileFor(entry: DownloadEntry): File {
@@ -260,10 +300,10 @@ class DownloadStore(
             val p = json.getJSONObject("provenance")
             val entry = DownloadEntry(
                 json.getString("sha256"), json.getString("fileName"), json.getLong("sizeBytes"),
-                json.getLong("createdAtMillis"), DownloadProvenance(
+                json.getLong("createdAtMillis"), normalizeProvenance(DownloadProvenance(
                     p.getString("site"), p.getString("pageUrl"), p.getString("title"),
                     p.optStringOrNull("author"), p.optStringOrNull("license"), p.optStringOrNull("thumbnailUrl"),
-                ),
+                )),
             )
             val file = fileFor(entry)
             if (entry.sha256 != directory.name || !file.isFile || file.length() != entry.sizeBytes) {
@@ -293,10 +333,11 @@ class DownloadStore(
         val extension = when {
             base.endsWith(".stl", ignoreCase = true) -> base.takeLast(4)
             base.endsWith(".3mf", ignoreCase = true) -> base.takeLast(4)
+            base.endsWith(".zip", ignoreCase = true) -> base.takeLast(4)
             else -> null
         }
         if (extension == null) {
-            throw IllegalArgumentException("Only STL and 3MF downloads are supported")
+            throw IllegalArgumentException("Only STL, 3MF and ZIP downloads are supported")
         }
         return if (base.length <= 128) base else base.dropLast(extension.length).take(128 - extension.length) + extension
     }
@@ -306,6 +347,11 @@ class DownloadStore(
         if (parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) throw IllegalArgumentException("Credential in URL")
         return parsed.newBuilder().query(null).fragment(null).build().toString()
     }
+
+    private fun normalizeProvenance(provenance: DownloadProvenance): DownloadProvenance = provenance.copy(
+        pageUrl = if (provenance.site == "local" && provenance.pageUrl.isEmpty()) "" else publicUrl(provenance.pageUrl),
+        thumbnailUrl = provenance.thumbnailUrl?.let(::publicUrl),
+    )
 
     private fun looksLikeHtml(bytes: ByteArray, count: Int): Boolean {
         val prefix = String(bytes, 0, minOf(count, 256), Charsets.UTF_8).trimStart().lowercase(Locale.ROOT)

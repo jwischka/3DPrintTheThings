@@ -14,6 +14,7 @@ local.properties
 *.aab
 *.jks
 *.keystore
+__pycache__/
 *.dex
 *.class
 *.log

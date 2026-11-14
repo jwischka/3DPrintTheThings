@@ -26,6 +26,29 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="makerworld.com" />
+                <data android:host="*.makerworld.com" />
+                <data android:host="printables.com" />
+                <data android:host="*.printables.com" />
+                <data android:host="thingiverse.com" />
+                <data android:host="*.thingiverse.com" />
+                <data android:host="thangs.com" />
+                <data android:host="*.thangs.com" />
+                <data android:host="cults3d.com" />
+                <data android:host="*.cults3d.com" />
+                <data android:pathPrefix="/model/" />
+                <data android:pathPrefix="/models/" />
+                <data android:pathPattern="/.*/models/.*" />
+                <data android:pathPattern="/.*/model/.*" />
+                <data android:pathPrefix="/thing:" />
+                <data android:pathPrefix="/designer/" />
+                <data android:pathPattern="/.*/3d-model/.*" />
+            </intent-filter>
             <!-- Known 3MF/STL MIME types — works with both content:// and file:// -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

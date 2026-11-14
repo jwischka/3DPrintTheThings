@@ -1,5 +1,6 @@
 package com.u1.slicer.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -10,17 +11,25 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.u1.slicer.SlicerViewModel
 import com.u1.slicer.U1SlicerApplication
 import com.u1.slicer.bambu.resolveTargetedSliceConfig
+import com.u1.slicer.browse.BrowserDownload
+import com.u1.slicer.browse.ModelSites
+import com.u1.slicer.browse.SiteBrowserScreen
+import com.u1.slicer.library.ArchiveScreen
+import com.u1.slicer.library.DownloadEntry
+import com.u1.slicer.library.DownloadProvenance
+import com.u1.slicer.library.IncomingArchiveScreen
 import com.u1.slicer.printer.PrinterViewModel
 import com.u1.slicer.ui.AiPaintResultScreen
 import com.u1.slicer.ui.CreateMixSlotDialog
 import com.u1.slicer.ui.FilamentScreen
 import com.u1.slicer.ui.GcodeViewer3DScreen
-import com.u1.slicer.ui.MakerWorldBrowserScreen
 import com.u1.slicer.ui.ModelViewerScreen
 import com.u1.slicer.ui.ProcessProfilesScreen
 
@@ -37,7 +46,13 @@ object Routes {
     const val MAKERWORLD_BROWSER = "makerworld_browser"
     const val BROWSE = "browse"
     const val DOWNLOADS = "downloads"
+    const val SITE_BROWSER = "site_browser"
+    const val ARCHIVE = "archive"
+    const val IMPORT_ARCHIVE = "import_archive"
     const val AI_PAINT = "ai_paint"
+
+    fun siteBrowser(siteId: String, url: String) = "$SITE_BROWSER/${Uri.encode(siteId)}?url=${Uri.encode(url)}"
+    fun importArchive(uri: String, name: String) = "$IMPORT_ARCHIVE?uri=${Uri.encode(uri)}&name=${Uri.encode(name)}"
 }
 
 @Composable
@@ -53,6 +68,40 @@ fun U1NavGraph(
     jobsContent: @Composable () -> Unit,
     settingsContent: @Composable () -> Unit
 ) {
+    val container = (navController.context.applicationContext as U1SlicerApplication).container
+    fun openDownloaded(entry: DownloadEntry) {
+        if (entry.fileName.endsWith(".zip", true)) {
+            navController.navigate("${Routes.ARCHIVE}/${entry.sha256}")
+        } else {
+            viewModel.loadModelFromFile(container.downloadStore.fileFor(entry), preserveDisplayName = entry.fileName)
+            navController.popBackStack(Routes.PREPARE, inclusive = false)
+        }
+    }
+    val browser: @Composable (String, String?) -> Unit = { siteId, url ->
+        ModelSites.find(siteId)?.let { site ->
+            SiteBrowserScreen(
+                site = site,
+                initialUrl = url ?: site.startUrl,
+                onDownload = { download ->
+                    val provenance = DownloadProvenance(site.id, download.pageUrl, download.title)
+                    val entry = when (download) {
+                        is BrowserDownload.Network -> container.downloadStore.download(
+                            download.url, download.fileName, provenance,
+                            headers = buildMap {
+                                put("User-Agent", download.userAgent)
+                                download.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+                            },
+                        )
+                        is BrowserDownload.Local -> container.downloadStore.importFile(download.tempFile, download.fileName, provenance)
+                    }
+                    openDownloaded(entry)
+                },
+                onMakerWorldCookies = { viewModel.saveMakerWorldCookies(it) },
+                onLibrary = { navController.navigate(Routes.DOWNLOADS) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+    }
     NavHost(navController = navController, startDestination = Routes.PREPARE) {
         composable(Routes.PREPARE) {
             prepareContent()
@@ -173,7 +222,6 @@ fun U1NavGraph(
             }
         }
         composable(Routes.BROWSE) {
-            val container = (navController.context.applicationContext as U1SlicerApplication).container
             com.u1.slicer.browse.BrowseScreen(
                 client = container.printablesClient,
                 onDownload = { model, file, url ->
@@ -182,18 +230,29 @@ fun U1NavGraph(
                             site = "printables", pageUrl = model.pageUrl, title = model.name,
                             author = model.author, thumbnailUrl = model.imageUrl,
                         ))
-                    viewModel.loadModelFromFile(container.downloadStore.fileFor(entry), preserveDisplayName = entry.fileName)
-                    navController.popBackStack(Routes.PREPARE, inclusive = false)
+                    openDownloaded(entry)
                 },
-                onBrowseMakerWorld = { navController.navigate(Routes.MAKERWORLD_BROWSER) },
+                onBrowseSite = { site, url -> navController.navigate(Routes.siteBrowser(site.id, url)) },
                 onLibrary = { navController.navigate(Routes.DOWNLOADS) },
                 onBack = { navController.popBackStack() },
             )
         }
         composable(Routes.DOWNLOADS) {
-            val container = (navController.context.applicationContext as U1SlicerApplication).container
             com.u1.slicer.library.LibraryScreen(
                 store = container.downloadStore,
+                onOpen = ::openDownloaded,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.MAKERWORLD_BROWSER) {
+            browser("makerworld", null)
+        }
+        composable("${Routes.SITE_BROWSER}/{siteId}?url={url}", arguments = listOf(
+            navArgument("siteId") { type = NavType.StringType },
+            navArgument("url") { type = NavType.StringType; nullable = true; defaultValue = null },
+        )) { entry -> browser(entry.arguments?.getString("siteId").orEmpty(), entry.arguments?.getString("url")) }
+        composable("${Routes.ARCHIVE}/{hash}") { entry ->
+            ArchiveScreen(container.downloadStore, entry.arguments?.getString("hash").orEmpty(),
                 onOpen = { file, name ->
                     viewModel.loadModelFromFile(file, preserveDisplayName = name)
                     navController.popBackStack(Routes.PREPARE, inclusive = false)
@@ -201,13 +260,18 @@ fun U1NavGraph(
                 onBack = { navController.popBackStack() },
             )
         }
-        composable(Routes.MAKERWORLD_BROWSER) {
-            MakerWorldBrowserScreen(
-                viewModel = viewModel,
-                onModelDownloaded = {
-                    navController.popBackStack(Routes.PREPARE, inclusive = false)
-                },
-                onBack = { navController.popBackStack() }
+        composable("${Routes.IMPORT_ARCHIVE}?uri={uri}&name={name}", arguments = listOf(
+            navArgument("uri") { type = NavType.StringType },
+            navArgument("name") { type = NavType.StringType; defaultValue = "archive.zip" },
+        )) { entry ->
+            IncomingArchiveScreen(
+                uri = entry.arguments?.getString("uri").orEmpty(),
+                fileName = entry.arguments?.getString("name").orEmpty(), store = container.downloadStore,
+                onImported = { imported ->
+                    navController.navigate("${Routes.ARCHIVE}/${imported.sha256}") {
+                        popUpTo(entry.destination.id) { inclusive = true }
+                    }
+                }, onBack = { navController.popBackStack() },
             )
         }
         composable(Routes.AI_PAINT) {

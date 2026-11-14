@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="browse_visit_site">Browse site</string>
+    <string name="library_damaged_entries">Some saved files could not be read. The other downloads are still available.</string>
+    <string name="archive_choose_model">Choose a model from the archive</string>
+    <string name="archive_no_models">This archive contains no supported STL or 3MF models.</string>
+    <string name="archive_import_failed">Could not import this archive. It may be damaged, too large, or contain unsafe file paths.</string>
+</resources>

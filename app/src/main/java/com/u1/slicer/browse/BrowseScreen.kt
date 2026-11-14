@@ -2,6 +2,8 @@ package com.u1.slicer.browse
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -31,7 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.R
@@ -43,19 +46,21 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.IOException
 
-/** A native Printables entry point; existing MakerWorld import remains available. */
+/** A shared query with native Printables results and site-owned search pages. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowseScreen(
     client: PrintablesClient,
     onDownload: suspend (PrintablesPrint, PrintablesFile, String) -> Unit,
-    onBrowseMakerWorld: () -> Unit,
+    onBrowseSite: (ModelSite, String) -> Unit,
     onLibrary: () -> Unit,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
+    var selectedSiteId by rememberSaveable { mutableStateOf("printables") }
+    val selectedSite = ModelSites.find(selectedSiteId) ?: ModelSites.all.first()
     var results by remember { mutableStateOf<List<PrintablesPrint>?>(null) }
     var detail by remember { mutableStateOf<PrintablesPrintDetail?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -103,15 +108,18 @@ fun BrowseScreen(
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (failed) {
                 Text(stringResource(R.string.browse_request_failed))
-                TextButton(onClick = { uriHandler.openUri(detail?.print?.pageUrl ?: "https://www.printables.com/") }) {
+                TextButton(onClick = { openExternalBrowser(context, detail?.print?.pageUrl ?: selectedSite.startUrl) }) {
                     Text(stringResource(R.string.browse_open_website))
                 }
             }
             val selected = detail
             if (selected == null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Printables")
-                    TextButton(onClick = onBrowseMakerWorld, enabled = !busy) { Text("MakerWorld") }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModelSites.all.forEach { site ->
+                        FilterChip(selected = selectedSiteId == site.id, enabled = !busy,
+                            onClick = { selectedSiteId = site.id; results = null; failed = false },
+                            label = { Text(site.name) })
+                    }
                 }
                 OutlinedTextField(
                     value = query,
@@ -123,9 +131,13 @@ fun BrowseScreen(
                 )
                 Button(onClick = {
                     results = null
-                    request { results = client.search(query) }
-                }, enabled = !busy && query.isNotBlank()) {
-                    Text(stringResource(R.string.browse_search))
+                    if (selectedSite.id == "printables" && query.isNotBlank()) {
+                        request { results = client.search(query) }
+                    } else {
+                        onBrowseSite(selectedSite, if (query.isBlank()) selectedSite.startUrl else selectedSite.searchUrl(query))
+                    }
+                }, enabled = !busy) {
+                    Text(stringResource(if (query.isBlank()) R.string.browse_visit_site else R.string.browse_search))
                 }
                 if (results?.isEmpty() == true) Text(stringResource(R.string.browse_no_results))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -142,7 +154,7 @@ fun BrowseScreen(
                 }
             } else {
                 Text(selected.print.name)
-                TextButton(onClick = { uriHandler.openUri(selected.print.pageUrl) }) {
+                TextButton(onClick = { openExternalBrowser(context, selected.print.pageUrl) }) {
                     Text(stringResource(R.string.browse_open_website))
                 }
                 // The inherited engine advertises other formats, but only these paths are

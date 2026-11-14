@@ -57,6 +57,8 @@ import com.u1.slicer.util.toFloatLenient
 import com.u1.slicer.data.SliceResult
 import com.u1.slicer.data.WipeTowerDepthEstimator
 import com.u1.slicer.bambu.resolveTargetedSliceConfig
+import com.u1.slicer.browse.isIncomingZip
+import com.u1.slicer.browse.sharedModelLink
 import com.u1.slicer.debug.TestCommandReceiver
 import com.u1.slicer.navigation.U1NavGraph
 import com.u1.slicer.navigation.Routes
@@ -96,6 +98,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNullOrEmpty()) return@registerForActivityResult
+        if (uris.size == 1 && routeIncomingArchive(uris.single())) return@registerForActivityResult
         viewModel.setLoadingFromPicker()
         // F77 (GitHub #109): multi-select picker. One file uses the legacy
         // path; many files run through the multi-STL combiner.
@@ -210,7 +213,32 @@ class MainActivity : ComponentActivity() {
         return supported to candidateName
     }
 
+    private fun navigateIncoming(route: String) {
+        val callback = navigateTabCallback
+        if (callback == null) pendingNavigateTo = route else callback(route)
+    }
+
+    private fun routeIncomingArchive(uri: Uri): Boolean {
+        if (uri.scheme != "content") return false
+        val name = viewModel.getFileDisplayName(uri)
+        if (!isIncomingZip(name, contentResolver.getType(uri))) return false
+        navigateIncoming(Routes.importArchive(uri.toString(), name ?: "archive.zip"))
+        return true
+    }
+
+    private fun routeSharedModelLink(text: String): Boolean {
+        val link = sharedModelLink(text) ?: return false
+        if (link.site.id == "makerworld") {
+            viewModel.importFromSharedUrl(link.url)
+            navigateIncoming(Routes.PREPARE)
+        } else {
+            navigateIncoming(Routes.siteBrowser(link.site.id, link.url))
+        }
+        return true
+    }
+
     private fun importIncomingModelUri(uri: Uri) {
+        if (routeIncomingArchive(uri)) return
         val (supported, candidateName) = isSupportedIncomingModel(uri)
         val name = candidateName ?: ""
         diagnostics.recordEvent(
@@ -237,7 +265,10 @@ class MainActivity : ComponentActivity() {
                 mapOf(
                     "action" to intent.action,
                     "type" to intent.type,
-                    "data" to intent.data?.toString(),
+                    "data" to intent.data?.let { uri ->
+                        if (uri.scheme in setOf("https", "http")) uri.host
+                        else uri.toString()
+                    },
                     "hasExtraStream" to intent.hasExtra(Intent.EXTRA_STREAM),
                     "hasExtraText" to intent.hasExtra(Intent.EXTRA_TEXT)
                 )
@@ -246,7 +277,7 @@ class MainActivity : ComponentActivity() {
         when (intent?.action) {
             Intent.ACTION_VIEW -> {
                 intent.data?.let { uri ->
-                    importIncomingModelUri(uri)
+                    if (!routeSharedModelLink(uri.toString())) importIncomingModelUri(uri)
                     intent.action = null
                     intent.data = null
                 }
@@ -270,8 +301,7 @@ class MainActivity : ComponentActivity() {
                 // Fallback: text URL (e.g. Bambu Handy shares MakerWorld URLs as text/plain)
                 val text = intent.getStringExtra(Intent.EXTRA_TEXT)
                 if (!text.isNullOrBlank()) {
-                    Log.i("SlicerVM", "ACTION_SEND with EXTRA_TEXT: $text")
-                    viewModel.importFromSharedUrl(text)
+                    if (!routeSharedModelLink(text)) viewModel.importFromSharedUrl(text)
                     intent.action = null
                     intent.removeExtra(Intent.EXTRA_TEXT)
                 }
@@ -506,10 +536,12 @@ class MainActivity : ComponentActivity() {
 
                 // Shared tab navigation helpers — single-top + pop to start to avoid stacking
                 val navigateTab = { route: String ->
+                    val restoreTab = !route.startsWith("${Routes.SITE_BROWSER}/") &&
+                        !route.startsWith("${Routes.IMPORT_ARCHIVE}?")
                     navController.navigate(route) {
-                        popUpTo(Routes.PREPARE) { saveState = true }
+                        popUpTo(Routes.PREPARE) { saveState = restoreTab }
                         launchSingleTop = true
-                        restoreState = true
+                        restoreState = restoreTab
                     }
                 }
                 var sharedPreviewCameraState by remember {

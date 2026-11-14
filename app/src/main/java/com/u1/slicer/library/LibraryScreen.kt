@@ -28,25 +28,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.R
+import com.u1.slicer.browse.openExternalBrowser
 import kotlinx.coroutines.launch
-import java.io.File
 import java.io.IOException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(store: DownloadStore, onOpen: (File, String) -> Unit, onBack: () -> Unit) {
+fun LibraryScreen(store: DownloadStore, onOpen: (DownloadEntry) -> Unit, onBack: () -> Unit) {
     var entries by remember { mutableStateOf<List<DownloadEntry>>(emptyList()) }
     var deletion by remember { mutableStateOf<DownloadEntry?>(null) }
     var failed by remember { mutableStateOf(false) }
+    var damagedEntries by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
+    suspend fun refresh() {
+        val listing = store.listing()
+        entries = listing.entries
+        damagedEntries = listing.unreadableEntries > 0
+    }
     LaunchedEffect(store) {
-        try { entries = store.entries() } catch (_: IOException) { failed = true }
+        try { refresh() } catch (_: IOException) { failed = true }
         finally { loading = false }
     }
     deletion?.let { entry ->
@@ -60,7 +66,7 @@ fun LibraryScreen(store: DownloadStore, onOpen: (File, String) -> Unit, onBack: 
                     scope.launch {
                         try {
                             failed = !store.delete(entry)
-                            entries = store.entries()
+                            refresh()
                         } catch (_: IOException) { failed = true }
                     }
                 }) { Text(stringResource(R.string.library_delete)) }
@@ -78,6 +84,7 @@ fun LibraryScreen(store: DownloadStore, onOpen: (File, String) -> Unit, onBack: 
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (failed) item { Text(stringResource(R.string.library_failed)) }
+            if (damagedEntries) item { Text(stringResource(R.string.library_damaged_entries)) }
             if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (entries.isEmpty() && !failed && !loading) item { Text(stringResource(R.string.library_empty)) }
             items(entries, key = { it.sha256 }) { entry ->
@@ -89,11 +96,13 @@ fun LibraryScreen(store: DownloadStore, onOpen: (File, String) -> Unit, onBack: 
                             TextButton(onClick = {
                                 try {
                                     val file = store.fileFor(entry)
-                                    if (file.isFile) onOpen(file, entry.fileName) else failed = true
+                                    if (file.isFile) onOpen(entry) else failed = true
                                 } catch (_: IOException) { failed = true }
                             }) { Text(stringResource(R.string.library_open)) }
-                            TextButton(onClick = { uriHandler.openUri(entry.provenance.pageUrl) }) {
-                                Text(stringResource(R.string.browse_open_website))
+                            if (entry.provenance.pageUrl.isNotBlank()) {
+                                TextButton(onClick = { if (!openExternalBrowser(context, entry.provenance.pageUrl)) failed = true }) {
+                                    Text(stringResource(R.string.browse_open_website))
+                                }
                             }
                             TextButton(onClick = { deletion = entry }) { Text(stringResource(R.string.library_delete)) }
                         }

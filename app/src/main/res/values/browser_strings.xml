@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="browser_close">Close browser</string>
+    <string name="browser_library">Library</string>
+    <string name="browser_open_external">Open in browser</string>
+    <string name="browser_cancel">Cancel</string>
+    <string name="browser_external_auth_title">Continue sign-in in your browser</string>
+    <string name="browser_external_auth_message">This sign-in page opens in your browser. Sign-in there may not carry over to the in-app browser.</string>
+    <string name="browser_download_failed">Could not import the download. Try again or open this page in your browser.</string>
+</resources>
