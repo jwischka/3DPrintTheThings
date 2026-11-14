@@ -96,6 +96,36 @@ class LongOpServiceStackTest {
     }
 
     @Test
+    fun `older stop delivered after newer start keeps newer foreground stage`() {
+        LongOpService.startPure("Old preparation")
+        val oldStop = LongOpService.stopPure()
+        LongOpService.startPure("New preparation")
+        LongOpService.updatePure(62, null)
+
+        assertEquals(LongOpService.ACTION_STOP, oldStop.action)
+        // The queued old STOP merely wakes the Service; it renders live state.
+        val deliveredOldStop = LongOpService.commandForDeliveryPure()
+        assertEquals(LongOpService.ACTION_UPDATE, deliveredOldStop.action)
+        assertEquals("New preparation", deliveredOldStop.stage)
+        assertEquals(62, deliveredOldStop.progress)
+        assertEquals("New preparation", LongOpService.currentStageOrNull())
+        LongOpService.stopPure()
+        assertEquals(LongOpService.ACTION_STOP, LongOpService.commandForDeliveryPure().action)
+    }
+
+    @Test
+    fun `queued older update cannot reset current progress`() {
+        val oldUpdate = LongOpService.updatePure(15, "Old stage")
+        LongOpService.startPure("New preparation")
+        LongOpService.updatePure(62, null)
+
+        assertEquals(15, oldUpdate.progress)
+        val deliveredOldUpdate = LongOpService.commandForDeliveryPure()
+        assertEquals("New preparation", deliveredOldUpdate.stage)
+        assertEquals(62, deliveredOldUpdate.progress)
+    }
+
+    @Test
     fun `concurrent pushes serialize under lock without throwing`() {
         val threads = (0 until 16).map { i ->
             Thread {

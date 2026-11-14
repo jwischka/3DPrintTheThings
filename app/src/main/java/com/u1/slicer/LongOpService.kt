@@ -39,8 +39,6 @@ class LongOpService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-        val stage = intent?.getStringExtra(EXTRA_STAGE)
         // B130 (#158): every onStartCommand reached via startForegroundService()
         // MUST call startForeground() within Android's 5s watchdog — even when we
         // immediately want to stop. The ACTION_STOP and empty-stage (post-kill
@@ -48,14 +46,18 @@ class LongOpService : Service() {
         // a stop / empty command arriving as the start crashed the app with
         // ForegroundServiceDidNotStartInTimeException under rapid start/stop churn
         // (more likely on a hot / busy phone). Promote first on every path, then stop.
-        if (action == ACTION_STOP || stage.isNullOrBlank()) {
-            startForeground(NOTIFICATION_ID, buildNotification(stage ?: "Working", 0))
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        // Resolve and apply while holding the same lock as stack mutations. A queued
+        // STOP may otherwise arrive after a newer start and end its foreground service.
+        synchronized(stackLock) {
+            val command = commandForDeliveryLocked()
+            if (command.action == ACTION_STOP) {
+                startForeground(NOTIFICATION_ID, buildNotification("Working", 0))
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification(command.stage ?: "Working", command.progress))
+            }
         }
-        val progress = intent.getIntExtra(EXTRA_PROGRESS, 0)
-        startForeground(NOTIFICATION_ID, buildNotification(stage, progress))
         return START_NOT_STICKY
     }
 
@@ -108,6 +110,7 @@ class LongOpService : Service() {
 
         private val stackLock = Any()
         private val stageStack = ArrayDeque<String>()
+        private var currentProgress = 0
 
         /** Stack-mutation result: what the Service should now render. */
         internal data class DispatchPayload(val action: String, val stage: String?, val progress: Int)
@@ -133,8 +136,11 @@ class LongOpService : Service() {
          */
         @VisibleForTesting
         internal fun startPure(stage: String): DispatchPayload {
-            synchronized(stackLock) { stageStack.addLast(stage) }
-            return DispatchPayload(ACTION_UPDATE, currentStageOrNull(), 0)
+            return synchronized(stackLock) {
+                stageStack.addLast(stage)
+                currentProgress = 0
+                DispatchPayload(ACTION_UPDATE, stage, 0)
+            }
         }
 
         /**
@@ -143,15 +149,16 @@ class LongOpService : Service() {
          */
         @VisibleForTesting
         internal fun updatePure(progress: Int, stage: String?): DispatchPayload {
-            if (stage != null) {
-                synchronized(stackLock) {
+            return synchronized(stackLock) {
+                if (stage != null) {
                     if (stageStack.isNotEmpty()) {
                         stageStack.removeLast()
                     }
                     stageStack.addLast(stage)
                 }
+                currentProgress = progress
+                DispatchPayload(ACTION_UPDATE, stageStack.lastOrNull(), currentProgress)
             }
-            return DispatchPayload(ACTION_UPDATE, currentStageOrNull(), progress)
         }
 
         /**
@@ -160,16 +167,24 @@ class LongOpService : Service() {
          */
         @VisibleForTesting
         internal fun stopPure(): DispatchPayload {
-            val (becameEmpty, newTop) = synchronized(stackLock) {
+            return synchronized(stackLock) {
                 if (stageStack.isNotEmpty()) stageStack.removeLast()
-                stageStack.isEmpty() to stageStack.lastOrNull()
-            }
-            return if (becameEmpty) {
-                DispatchPayload(ACTION_STOP, null, 0)
-            } else {
-                DispatchPayload(ACTION_UPDATE, newTop, 0)
+                currentProgress = 0
+                val top = stageStack.lastOrNull()
+                DispatchPayload(if (top == null) ACTION_STOP else ACTION_UPDATE, top, 0)
             }
         }
+
+        /** Caller must keep stackLock held until the returned command is applied. */
+        private fun commandForDeliveryLocked(): DispatchPayload {
+            val top = stageStack.lastOrNull()
+            return if (top == null) DispatchPayload(ACTION_STOP, null, 0)
+            else DispatchPayload(ACTION_UPDATE, top, currentProgress)
+        }
+
+        @VisibleForTesting
+        internal fun commandForDeliveryPure(): DispatchPayload =
+            synchronized(stackLock) { commandForDeliveryLocked() }
 
         @VisibleForTesting
         internal fun currentStageOrNull(): String? =
@@ -177,7 +192,7 @@ class LongOpService : Service() {
 
         @VisibleForTesting
         internal fun resetForTest() {
-            synchronized(stackLock) { stageStack.clear() }
+            synchronized(stackLock) { stageStack.clear(); currentProgress = 0 }
             dispatchSink = null
         }
 
