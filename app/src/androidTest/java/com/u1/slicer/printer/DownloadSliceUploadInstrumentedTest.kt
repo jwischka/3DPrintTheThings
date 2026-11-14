@@ -145,6 +145,33 @@ class DownloadSliceUploadInstrumentedTest {
         } finally { files.deleteRecursively() }
     }
 
+    @Test fun truncatedFixtureCleansPartialAndNormalRetryPersists() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val files = File(context.filesDir, "truncated-model-download-${System.nanoTime()}")
+        assertTrue(files.mkdirs())
+        try {
+            val store = DownloadStore(files, http)
+            try {
+                store.download("$base/__sim/fixture/truncated-cube_10mm.stl",
+                    "cube_10mm.stl", provenance, fixtureHeaders)
+                fail("Truncated fixture must not commit")
+            } catch (_: IOException) {
+                // The advertised length exceeds the bytes actually sent.
+            }
+            assertTrue(store.entries().isEmpty())
+            assertTrue(File(files, "downloads").listFiles().orEmpty().none {
+                it.name.startsWith(".partial-") || it.name == fixtureHash
+            })
+            assertEquals(0, control("state").getJSONArray("events").length())
+
+            val downloaded = store.download(fixture, "cube_10mm.stl", provenance, fixtureHeaders)
+            assertEquals(fixtureHash, downloaded.sha256)
+            val reopened = DownloadStore(files, http)
+            assertEquals(listOf(downloaded), reopened.entries())
+            assertEquals(fixtureHash, sha256(reopened.fileFor(downloaded)))
+        } finally { files.deleteRecursively() }
+    }
+
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->

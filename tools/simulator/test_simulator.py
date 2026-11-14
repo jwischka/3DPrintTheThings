@@ -5,6 +5,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from http.client import HTTPConnection, RemoteDisconnected
+from http.client import IncompleteRead
 
 from u1_simulator import API_KEY, CONTROL_KEY, FIXTURE_SHA256, MARKER, MAX_UPLOAD, Server
 
@@ -58,6 +59,15 @@ class SimulatorTest(unittest.TestCase):
         self.assertLessEqual(len(content), 1024 * 1024)
         self.assertEqual(404, self.request("/__sim/fixture/missing.stl",
                                            headers={"X-Simulator-Control": CONTROL_KEY})[0])
+
+    def test_truncated_model_fixture_advertises_full_size_then_closes(self):
+        path = "/__sim/fixture/truncated-cube_10mm.stl"
+        with urlopen(Request(self.base + path, headers={"X-Simulator-Control": CONTROL_KEY}), timeout=3) as reply:
+            advertised = int(reply.headers["Content-Length"])
+            with self.assertRaises(IncompleteRead) as failure:
+                reply.read()
+        self.assertEqual(advertised // 2, len(failure.exception.partial))
+        self.assertGreater(advertised, len(failure.exception.partial))
 
     def test_upload_then_simulated_print_controls(self):
         self.assertEqual(404, self.request("/printer/print/start?filename=fixture.gcode", b"")[0])

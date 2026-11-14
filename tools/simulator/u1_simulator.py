@@ -53,7 +53,8 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address, require_key=True):
         self.state = State()
         self.require_key = require_key
-        self.model_fixture = FIXTURE_PATH.read_bytes()
+        with FIXTURE_PATH.open("rb") as source:
+            self.model_fixture = source.read(1024 * 1024 + 1)
         if not 0 < len(self.model_fixture) <= 1024 * 1024 or hashlib.sha256(self.model_fixture).hexdigest() != FIXTURE_SHA256:
             raise ValueError("Pinned model fixture is missing or changed")
         super().__init__(address, Handler)
@@ -130,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/__sim/fixture/"):
             if not self.allowed(control=True):
                 return
-            if parsed.path != "/__sim/fixture/cube_10mm.stl":
+            if parsed.path not in ("/__sim/fixture/cube_10mm.stl", "/__sim/fixture/truncated-cube_10mm.stl"):
                 return self.reply({"error": "Unknown model fixture"}, 404)
             data = self.server.model_fixture
             self.send_response(200)
@@ -138,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(data)
+            self.wfile.write(data[:len(data) // 2] if parsed.path.endswith("/truncated-cube_10mm.stl") else data)
             self.close_connection = True
             return
         if parsed.path == "/__sim/state":

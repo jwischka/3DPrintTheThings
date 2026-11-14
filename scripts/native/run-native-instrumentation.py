@@ -20,8 +20,12 @@ runner.TEST_CLASS = (
     "com.u1.slicer.slicing.NativeContractInstrumentedTest#dualColorToolMappingAndRetraction,"
     "com.u1.slicer.slicing.NativeContractInstrumentedTest#cancellationDuringProcessingAllowsNextSlice,"
     "com.u1.slicer.slicing.NativeContractInstrumentedTest#cancellationAtExportTransitionAllowsNextSlice,"
+    "com.u1.slicer.slicing.NativeContractInstrumentedTest#cancellationAtResultReadingAllowsNextSlice,"
+    "com.u1.slicer.slicing.NativeContractInstrumentedTest#crossThreadCancellationDuringProcessingAllowsNextSlice,"
     "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#downloadedLibrarySelectionSlicesAndUploadsExactGcode,"
-    "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#failedFixtureDownloadLeavesNoEntryOrUpload"
+    "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#failedFixtureDownloadLeavesNoEntryOrUpload,"
+    "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#truncatedFixtureCleansPartialAndNormalRetryPersists,"
+    "com.u1.slicer.MainActivityWorkflowInstrumentedTest#libraryOpenPrepareSlicePreviewAndUploadOnly"
 )
 runner.EXPECTED_TESTS = len(runner.TEST_CLASS.split(","))
 sys.exit(runner.main())

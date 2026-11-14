@@ -48,13 +48,24 @@ runtime compatibility with a 16 KiB page-size device.
 The x86 smoke job uses only the x86 engine artifact. It builds ordinary debug
 and test APKs, creates a disposable app APK containing the experimental x86 JNI
 library and NDK C++ runtime, and signs that APK and an isolated test APK with
-the same ephemeral debug key. On a Linux x86_64 emulator, it runs the bundled
-tetrahedron and rotated-STL tests, a dual-color 3MF tool-change regression, and
-a 10 mm cube capture through the real JNI bridge, requiring a positive
-instrumentation result. The cube capture rejects output without parsed model
+the same ephemeral debug key. On a Linux x86_64 emulator, it exercises STL and
+dual-color 3MF slicing, temperature commands, relative retraction, tool remapping,
+bed bounds, cancellation and recovery, and a 10 mm cube capture through the real
+JNI bridge. The runner requires matching selected, started, and successful test
+counts and rejects skipped or failed tests. The cube capture rejects output without parsed model
 extrusion and records G-code, the public SliceConfig fields, engine version, runtime ABIs,
 and input/profile/output hashes. Raw STL uses direct SliceConfig with printer
 machine G-code; recording bundled profile hashes does not mean their complete
 settings were embedded. Export checks the fixture and output hashes before
 publishing the capture artifact. The smoke exercises native slicing in an
 emulator; printer hardware acceptance remains an owner-run check.
+
+The same isolated job starts the in-memory U1 simulator. Its fixed model endpoint
+serves a bounded, hash-checked cube fixture and can truncate that response to test
+download cleanup and retry. A component test downloads into the durable library,
+clicks the real Library Open action, slices, parses the preview, and verifies the
+exact G-code upload hash in simulator state. A MainActivity test navigates through
+the debug Library entry point and drives Prepare, Slice, Preview and Upload Only;
+it checks the staged, remapped output against the accepted upload. Tests verify
+the fixed simulator marker and endpoint before mutations and never send printer
+commands to a configurable external destination.
