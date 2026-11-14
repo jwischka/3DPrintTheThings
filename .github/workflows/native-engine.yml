@@ -8,6 +8,10 @@ on:
       - 'scripts/native/build-engine.sh'
       - 'scripts/native/prepare-emulator-apk.py'
       - 'scripts/native/run-native-instrumentation.py'
+      - 'scripts/native/export-parity-capture.py'
+      - 'scripts/native/tests/**'
+      - 'app/src/androidTest/java/com/u1/slicer/slicing/AndroidParityCaptureTest.kt'
+      - 'tools/parity/fixtures/cube_10mm.stl'
       - 'scripts/native/sources.lock'
       - 'scripts/native/build-deps.sh'
       - 'scripts/native/extra-sources.lock'
@@ -115,6 +119,11 @@ jobs:
               -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
               -dname 'CN=Android Debug,O=Android,C=US'
           fi
+      - name: Prepare exact parity fixture
+        run: |
+          mkdir -p app/src/androidTest/assets
+          cp tools/parity/fixtures/cube_10mm.stl app/src/androidTest/assets/cube_10mm.stl
+          python3 -m unittest discover -s scripts/native/tests -v
       - name: Build original test APKs
         run: >-
           ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --no-build-cache --max-workers=2
@@ -140,7 +149,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Slice a bundled tetrahedron using the experimental x86 engine
+      - name: Slice tetrahedron and capture cube output using the experimental x86 engine
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -148,10 +157,11 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: >-
-            python3 scripts/native/run-native-instrumentation.py
-            --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk"
-            --log native-slice-report/instrumentation.log --timeout 600
+          script: |
+            python3 scripts/native/run-native-instrumentation.py --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/instrumentation.log --timeout 900
+            python3 scripts/native/export-parity-capture.py --output native-slice-report/cube
+            python3 tools/parity/parity.py inspect native-slice-report/cube/cube_10mm.android.gcode > native-slice-report/cube/metrics.json
+            cp "$RUNNER_TEMP/native-engine-x86/sha256.txt" native-slice-report/engine-sha256.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:

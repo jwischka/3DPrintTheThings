@@ -45,6 +45,11 @@ The x86 smoke job uses only the x86 engine artifact. It builds ordinary debug
 and test APKs, creates a disposable app APK containing the experimental x86 JNI
 library and NDK C++ runtime, and signs that APK and an isolated test APK with
 the same ephemeral debug key. On a Linux x86_64 emulator, it runs the bundled
-tetrahedron slicing instrumentation test through the real JNI bridge and
-requires a positive instrumentation result. The smoke exercises native slicing
-in an emulator; printer hardware acceptance remains an owner-run check.
+tetrahedron slicing instrumentation test and a 10 mm cube capture through the
+real JNI bridge, requiring a positive instrumentation result. The cube capture
+records G-code, the public SliceConfig fields, engine version, runtime ABIs,
+and input/profile/output hashes. Raw STL uses direct SliceConfig with printer
+machine G-code; recording bundled profile hashes does not mean their complete
+settings were embedded. Export checks the fixture and output hashes before
+publishing the capture artifact. The smoke exercises native slicing in an
+emulator; printer hardware acceptance remains an owner-run check.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Use the shared bounded adb runner for one real native slicing smoke test."""
+"""Run real native slicing smoke and provenance capture through bounded adb."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -10,5 +10,8 @@ if spec is None or spec.loader is None:
     raise RuntimeError("Cannot load instrumentation runner")
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
-runner.TEST_CLASS = "com.u1.slicer.slicing.SlicingIntegrationTest#tetrahedron_stl_slicesSuccessfully"
+runner.TEST_CLASS = (
+    "com.u1.slicer.slicing.SlicingIntegrationTest#tetrahedron_stl_slicesSuccessfully,"
+    "com.u1.slicer.slicing.AndroidParityCaptureTest#captureCube10mmGcode"
+)
 sys.exit(runner.main())
