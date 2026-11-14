@@ -1,0 +1,61 @@
+name: Experimental native dependency bundle
+
+on:
+  push:
+    paths:
+      - '.github/workflows/native-dependencies.yml'
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Component to build (all builds the complete bundle)'
+        type: choice
+        required: true
+        default: zlib
+        options: [zlib, expat, headers, clipper2, tbb, gmp_mpfr, boost, occt, all]
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    env:
+      ANDROID_ABI: ${{ matrix.abi }}
+      NATIVE_WORK_DIR: ${{ runner.temp }}/native-deps
+      NATIVE_JOBS: '2'
+      NATIVE_COMPONENT: ${{ inputs.component || 'all' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'ndk;26.1.10909125'
+      - uses: actions/cache@v4
+        id: bundle-cache
+        with:
+          path: ${{ runner.temp }}/native-deps/prefix/${{ matrix.abi }}
+          key: native-deps-ndk26-${{ matrix.abi }}-${{ inputs.component || 'all' }}-${{ hashFiles('scripts/native/sources.lock', 'scripts/native/build-deps.sh') }}
+      - name: Build locked native sources
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          mkdir -p native-dependency-report
+          bash scripts/native/build-deps.sh "$NATIVE_COMPONENT" 2>&1 | tee native-dependency-report/build.log
+      - name: Record output checksums
+        run: |
+          mkdir -p native-dependency-report
+          find "$NATIVE_WORK_DIR/prefix/$ANDROID_ABI" -type f -name '*.a' -print0 | sort -z | xargs -0 -r sha256sum > native-dependency-report/static-libraries.sha256
+          echo 'Dependency bundle only; no slicing engine was built.' | tee native-dependency-report/status.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-dependency-report-${{ matrix.abi }}-${{ inputs.component || 'all' }}
+          path: native-dependency-report/
+          if-no-files-found: warn
