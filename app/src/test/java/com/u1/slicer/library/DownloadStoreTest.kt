@@ -184,9 +184,10 @@ class DownloadStoreTest {
 
     @Test fun redirectDropsHeadersAcrossHosts() = runBlocking<Unit> {
         val other = MockWebServer()
-        other.start()
+        other.start(InetAddress.getByName("127.0.0.1"), 0)
         try {
-            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", other.url("/file")))
+            val target = other.url("/file").newBuilder().host("127.0.0.1").build()
+            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", target))
             other.enqueue(MockResponse().setBody("model"))
             store.download(url("/redirect").toString(), "model.stl", provenance,
                 headers = mapOf("Cookie" to "private=value", "Authorization" to "Bearer secret"))
