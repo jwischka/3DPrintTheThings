@@ -1,0 +1,52 @@
+name: Native dependency smoke (zlib only)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/native-dependency-smoke.yml'
+      - 'scripts/native/build-deps.sh'
+      - 'scripts/native/sources.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  zlib:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'ndk;26.1.10909125'
+      - name: Build pinned zlib for Android
+        env:
+          ANDROID_ABI: ${{ matrix.abi }}
+          NATIVE_WORK_DIR: ${{ runner.temp }}/native-deps
+          NATIVE_JOBS: '2'
+        run: |
+          set -o pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          mkdir -p native-dependency-report
+          bash scripts/native/build-deps.sh zlib 2>&1 | tee native-dependency-report/build.log
+          archive="$NATIVE_WORK_DIR/prefix/$ANDROID_ABI/zlib/lib/$ANDROID_ABI/libz.a"
+          tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          member=$("$tools/llvm-ar" t "$archive" | head -n 1)
+          "$tools/llvm-ar" p "$archive" "$member" > "$NATIVE_WORK_DIR/sample.o"
+          "$tools/llvm-readelf" -h "$NATIVE_WORK_DIR/sample.o" | tee native-dependency-report/elf-header.txt
+          if [ "$ANDROID_ABI" = arm64-v8a ]; then expected=AArch64; else expected='Advanced Micro Devices X86-64'; fi
+          grep -F "$expected" native-dependency-report/elf-header.txt
+          sha256sum "$archive" | tee native-dependency-report/archive.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-zlib-${{ matrix.abi }}-report
+          path: native-dependency-report/
+          if-no-files-found: warn
