@@ -33,10 +33,8 @@ jobs:
           expected_commit=40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19
           actual_commit=$(git -C upstream-orca rev-parse HEAD)
           test "$actual_commit" = "$expected_commit"
-          git -C upstream-orca sparse-checkout set \
-            'resources/profiles/Snapmaker/machine' \
-            'resources/profiles/Snapmaker/process' \
-            'resources/profiles/Snapmaker/filament'
+          echo "Using official profile source commit $actual_commit"
+          git -C upstream-orca sparse-checkout set resources/profiles
       - name: Install headless OpenGL runtime dependency
         run: |
           sudo apt-get update
