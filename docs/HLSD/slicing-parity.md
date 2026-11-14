@@ -15,7 +15,9 @@ sequence must match exactly. Comparisons fail closed if either file lacks one
 balanced CONFIG_BLOCK, Klipper flavor metadata, layer markers, positive
 extrusion, or positive duration.
 Unknown macro commands and volumetric extrusion also make a comparison fail.
-These checks do not prove that two prints are equivalent.
+A baseline can capture successfully while remaining ineligible for comparison
+because it contains opaque printer macros. Successful desktop slicing means only
+the CLI produced a result; it is not a parity pass.
 
 Run the dependency-free checks:
 
@@ -47,7 +49,10 @@ G-code separately and do not add private models or user data to fixtures. The
 manual `Capture desktop Orca baseline` workflow runs this process on a pinned
 v2.5.0 Ubuntu CLI, using a 10 mm cube and the matching official Snapmaker U1,
 Standard 0.20 mm, and Generic PLA presets. It uploads the raw G-code and JSON
-report as a 30-day artifact; the report contains preset-file hashes.
+report as a 30-day artifact; the report contains preset-file hashes. The Android
+app's bundled profile assets are maintained separately from those desktop
+profiles, so their hashes and effective settings must be aligned before a
+cross-engine comparison can be interpreted.
 
 Fixtures cover absolute and relative extrusion, G90/G91 and M82/M83 modal
 commands, G92 E resets, retraction recovery, and tool changes. Extruder mode

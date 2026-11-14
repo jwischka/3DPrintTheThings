@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 from parity import analyze, compare, load_report
@@ -10,6 +11,32 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class GcodeParityTest(unittest.TestCase):
+    def test_cube_fixture_has_10mm_bounds_and_closed_triangles(self):
+        vertices = []
+        triangles = []
+        current = []
+        for line in (FIXTURES / "cube_10mm.stl").read_text(encoding="ascii").splitlines():
+            parts = line.strip().split()
+            if len(parts) == 4 and parts[0] == "vertex":
+                vertex = tuple(float(value) for value in parts[1:])
+                vertices.append(vertex)
+                current.append(vertex)
+                if len(current) == 3:
+                    triangles.append(tuple(current))
+                    current = []
+
+        self.assertEqual(len(triangles), 12)
+        self.assertEqual(tuple(min(v[i] for v in vertices) for i in range(3)), (0.0, 0.0, 0.0))
+        self.assertEqual(tuple(max(v[i] for v in vertices) for i in range(3)), (10.0, 10.0, 10.0))
+        self.assertEqual(current, [])
+
+        edge_counts = Counter()
+        for triangle in triangles:
+            for left, right in ((0, 1), (1, 2), (2, 0)):
+                edge_counts[tuple(sorted((triangle[left], triangle[right])))] += 1
+        self.assertEqual(len(edge_counts), 18)
+        self.assertTrue(all(count == 2 for count in edge_counts.values()))
+
     def test_absolute_coordinates_and_retraction_and_toolchange(self):
         result = analyze(FIXTURES / "absolute.gcode")
         self.assertEqual(result["layers"], 2)
