@@ -95,6 +95,7 @@ class GcodeParserTest {
         val file = writeGcode("""
             G1 Z0.3
             G1 X10 Y10 E1.0
+            G1 Z0.7
             ;LAYER_CHANGE
             G1 Z0.5
             G1 X20 Y20 E2.0
@@ -102,6 +103,7 @@ class GcodeParserTest {
         val result = GcodeParser.parse(file)
 
         assertEquals(2, result.layers.size)
+        assertEquals(0.3f, result.layers[0].z, 0.001f)
     }
 
     @Test
