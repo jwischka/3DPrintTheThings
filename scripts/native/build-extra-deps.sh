@@ -81,7 +81,7 @@ build_openssl() {
     (
         cd "$build/openssl"
         export ANDROID_NDK_ROOT="$ndk" PATH="$host/bin:$PATH"
-        ./Configure "$openssl_target" -D__ANDROID_API__=26 no-shared no-tests no-apps \
+        ./Configure "$openssl_target" -D__ANDROID_API__=26 no-shared no-tests \
             --prefix="$prefix/openssl" --libdir=lib
         make -j"$jobs" build_libs
         make install_dev

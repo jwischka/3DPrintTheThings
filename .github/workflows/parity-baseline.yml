@@ -30,6 +30,9 @@ jobs:
         run: |
           git clone --depth 1 --filter=blob:none --sparse --branch v2.5.0 \
             https://github.com/OrcaSlicer/OrcaSlicer.git upstream-orca
+          expected_commit=40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19
+          actual_commit=$(git -C upstream-orca rev-parse HEAD)
+          test "$actual_commit" = "$expected_commit"
           git -C upstream-orca sparse-checkout set \
             'resources/profiles/Snapmaker/machine' \
             'resources/profiles/Snapmaker/process' \
@@ -37,10 +40,8 @@ jobs:
       - name: Install headless OpenGL runtime dependency
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libopengl0
+          sudo apt-get install --yes libopengl0 libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0
       - name: Slice deterministic U1 fixture headlessly
-        env:
-          QT_QPA_PLATFORM: offscreen
         shell: bash
         run: |
           set -euo pipefail
@@ -48,7 +49,6 @@ jobs:
           machine="$profile/machine/Snapmaker U1 (0.4 nozzle).json"
           process="$profile/process/0.20 Standard @Snapmaker U1 (0.4 nozzle).json"
           filament="$profile/filament/Generic PLA @U1 0.4 nozzle.json"
-          mkdir -p parity-output
           mkdir -p parity-output
           squashfs-root/AppRun tools/parity/fixtures/cube_10mm.stl \
             --load-settings "$process;$machine" \
@@ -59,7 +59,7 @@ jobs:
           test -n "$gcode"
           input_hash=$(sha256sum tools/parity/fixtures/cube_10mm.stl | cut -d' ' -f1)
           python tools/parity/parity.py capture "$gcode" parity-output/desktop-baseline.json \
-            --engine 'OrcaSlicer v2.5.0 (commit 40ecc66)' \
+            --engine 'OrcaSlicer v2.5.0 (commit 40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19)' \
             --preset 'Snapmaker U1 0.4 nozzle + 0.20 Standard + Generic PLA @U1; v2.5.0' \
             --input-sha256 "$input_hash" \
             --cli-command 'OrcaSlicer v2.5.0 --slice 0 --load-settings <process;machine> --load-filaments <filament>' \

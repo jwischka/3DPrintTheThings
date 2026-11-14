@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - '.github/workflows/native-extra-dependencies.yml'
+      - 'scripts/native/build-extra-deps.sh'
+      - 'scripts/native/extra-sources.lock'
   workflow_dispatch:
     inputs:
       component:
