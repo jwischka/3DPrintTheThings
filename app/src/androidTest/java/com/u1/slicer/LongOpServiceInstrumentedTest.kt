@@ -34,6 +34,11 @@ class LongOpServiceInstrumentedTest {
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
         }
+        if (Build.VERSION.SDK_INT >= 33) {
+            assertEquals("Notification permission is required for this service assertion",
+                PackageManager.PERMISSION_GRANTED,
+                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS))
+        }
         LongOpService.resetForTest()
         context.stopService(Intent(context, LongOpService::class.java))
         try {
@@ -51,7 +56,11 @@ class LongOpServiceInstrumentedTest {
             context.startForegroundService(Intent(context, LongOpService::class.java).apply {
                 action = oldStop.action
             })
-            waitUntil { notificationText(notifications)?.contains("New preparation... (62%)") == true }
+            // Android 12+ may defer default foreground-service notification visibility
+            // for about 10 seconds: developer.android.com/develop/background-work/background-tasks.
+            waitUntil(20_000, notifications) {
+                notificationText(notifications)?.contains("New preparation... (62%)") == true
+            }
             val afterOldStop = activeNotification(notifications)
             assertNotNull("Old STOP removed the new foreground notification", afterOldStop)
             assertTrue(notificationText(notifications).orEmpty().contains("New preparation... (62%)"))
@@ -74,10 +83,18 @@ class LongOpServiceInstrumentedTest {
         activeNotification(manager)?.notification?.extras
             ?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
 
-    private fun waitUntil(condition: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + 5_000
+    private fun waitUntil(timeoutMillis: Long = 5_000, manager: NotificationManager? = null,
+                          condition: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMillis
         while (!condition()) {
-            if (SystemClock.uptimeMillis() >= deadline) throw AssertionError("Timed out waiting for service notification")
+            if (SystemClock.uptimeMillis() >= deadline) {
+                val active = manager?.activeNotifications?.joinToString { item ->
+                    "id=${item.id} text=${item.notification.extras.getCharSequence(Notification.EXTRA_TEXT)} " +
+                        "progress=${item.notification.extras.getInt(Notification.EXTRA_PROGRESS)}"
+                }
+                throw AssertionError("Timed out waiting for service notification; " +
+                    "stack=${LongOpService.currentStageOrNull()}, active=$active")
+            }
             SystemClock.sleep(25)
         }
     }
