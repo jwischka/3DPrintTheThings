@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest"
+TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest,com.u1.slicer.ui.LiveSpoolMappingInstrumentedTest"
 RUNNER = "io.github.jwischka.threedprintthethings.test/androidx.test.runner.AndroidJUnitRunner"
 
 

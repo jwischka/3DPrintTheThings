@@ -105,6 +105,13 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     val cameraState: StateFlow<CameraState> = printerRepo.cameraState
     val printerFilamentSlots: StateFlow<List<FilamentSlot>> = printerRepo.filamentSlots
 
+    suspend fun queryMappingFilamentSlots(expectedPrinterId: String): List<FilamentSlot>? {
+        val context = capturePrinterActionContext(activePrinterGeneration.get())
+        if (context.printerId != expectedPrinterId || !isCurrentPrinterAction(context)) return null
+        val slots = printerRepo.queryMappingFilamentSlots(expectedPrinterId)
+        return if (isCurrentPrinterAction(context)) slots else null
+    }
+
     val activeNickname: StateFlow<String> = printerRepo.activeNickname
 
     val printerCount: StateFlow<Int> = printerRepo.printerCount
@@ -176,6 +183,8 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     private val activePrinterGeneration = AtomicInteger(0)
     private val featureDiscoveryGeneration = AtomicInteger(0)
     @Volatile private var preparedSendGeneration: Int? = null
+    @Volatile private var preparedSendContext: PrinterActionContext? = null
+    @Volatile private var activeUiSendAttempt: Long? = null
 
     fun startCameraKeepalive() {
         if (!shouldStartCameraKeepalive(cameraKeepaliveJob?.isActive == true)) return
@@ -624,14 +633,37 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
      */
     fun beginSendPreparing() {
         _uploadProgress.begin()
+        activeUiSendAttempt = null
+        preparedSendContext = null
         preparedSendGeneration = activePrinterGeneration.get()
         _sendingState.value = SendingState.Preparing
     }
 
+    fun beginSendPreparing(printer: Printer): PrinterActionContext {
+        beginSendPreparing()
+        return PrinterActionContext(
+            generation = activePrinterGeneration.get(),
+            printerId = printer.id,
+            connectionFingerprint = printerConnectionFingerprint(printer),
+        ).also { preparedSendContext = it }
+    }
+
     /** F94 — surface a send/prep failure on the Printer screen (prevents a stuck banner). */
-    fun reportSendError(message: String) {
+    fun reportSendError(message: String, expectedContext: PrinterActionContext? = null) {
+        if (expectedContext != null) {
+            if (preparedSendContext !== expectedContext || expectedContext.generation != activePrinterGeneration.get()) return
+            viewModelScope.launch {
+                val current = isCurrentPrinterAction(expectedContext)
+                if (preparedSendContext !== expectedContext || expectedContext.generation != activePrinterGeneration.get()) return@launch
+                preparedSendContext = null
+                preparedSendGeneration = null
+                _sendingState.value = if (current) SendingState.Error(message) else SendingState.Idle
+            }
+            return
+        }
         val generation = preparedSendGeneration
         if (generation != null && generation != activePrinterGeneration.get()) return
+        preparedSendContext = null
         preparedSendGeneration = null
         _sendingState.value = SendingState.Error(message)
     }
@@ -642,14 +674,17 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
      * confirm the source is already in physical-slot space) before
      * reaching this function. The compiler enforces it.
      */
-    fun sendAndPrint(physical: com.u1.slicer.gcode.PhysicalGcodePath, modelName: String? = null) {
+    fun sendAndPrint(physical: com.u1.slicer.gcode.PhysicalGcodePath, modelName: String? = null, expectedContext: PrinterActionContext? = null) {
+        if (expectedContext != null && !shouldAcceptPreparedSend(expectedContext, preparedSendContext, activePrinterGeneration.get())) return
         sendJob?.cancel()
         val progressAttempt = _uploadProgress.begin()
+        activeUiSendAttempt = progressAttempt
         _sendingState.value = SendingState.Uploading
-        val requestedGeneration = consumePreparedSendGeneration()
+        val requestedGeneration = expectedContext?.generation ?: consumePreparedSendGeneration()
+        if (expectedContext != null) { preparedSendContext = null; preparedSendGeneration = null }
         sendJob = viewModelScope.launch(Dispatchers.IO) {
-            val actionContext = capturePrinterActionContext(requestedGeneration)
-            if (!isCurrentPrinterAction(actionContext)) return@launch
+            val actionContext = expectedContext ?: capturePrinterActionContext(requestedGeneration)
+            if (!isCurrentPrinterAction(actionContext)) { clearRejectedSend(progressAttempt, actionContext); return@launch }
             // Hold a foreground service across the upload. A 272 MB G-code can take
             // minutes over WAN; without this the cached-app freezer suspends the
             // process the moment the user backgrounds the app, truncating the
@@ -667,7 +702,8 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 // so the printer's file browser shows distinct, recognisable jobs.
                 val filename = PrinterRepository.resolveUploadBaseName(modelName, file.name)
                 val uploadContext = currentCoroutineContext()
-                val result = printerRepo.uploadAndPrint(file, filename) { sent, total ->
+                val result = printerRepo.uploadAndPrint(file, filename, actionContext.printerId, actionContext.connectionFingerprint,
+                    { actionContext.generation == activePrinterGeneration.get() }) { sent, total ->
                     if (uploadContext.isActive && actionContext.generation == activePrinterGeneration.get()) {
                         _uploadProgress.report(progressAttempt, sent, total)
                     }
@@ -692,14 +728,17 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
      * Phase 2 B.1 (2026-04-28) — accepts only [com.u1.slicer.gcode.PhysicalGcodePath].
      * See [sendAndPrint] for the type-safety rationale.
      */
-    fun sendUploadOnly(physical: com.u1.slicer.gcode.PhysicalGcodePath, modelName: String? = null) {
+    fun sendUploadOnly(physical: com.u1.slicer.gcode.PhysicalGcodePath, modelName: String? = null, expectedContext: PrinterActionContext? = null) {
+        if (expectedContext != null && !shouldAcceptPreparedSend(expectedContext, preparedSendContext, activePrinterGeneration.get())) return
         sendJob?.cancel()
         val progressAttempt = _uploadProgress.begin()
+        activeUiSendAttempt = progressAttempt
         _sendingState.value = SendingState.Uploading
-        val requestedGeneration = consumePreparedSendGeneration()
+        val requestedGeneration = expectedContext?.generation ?: consumePreparedSendGeneration()
+        if (expectedContext != null) { preparedSendContext = null; preparedSendGeneration = null }
         sendJob = viewModelScope.launch(Dispatchers.IO) {
-            val actionContext = capturePrinterActionContext(requestedGeneration)
-            if (!isCurrentPrinterAction(actionContext)) return@launch
+            val actionContext = expectedContext ?: capturePrinterActionContext(requestedGeneration)
+            if (!isCurrentPrinterAction(actionContext)) { clearRejectedSend(progressAttempt, actionContext); return@launch }
             // Foreground service across the upload — see sendAndPrint. A truncated
             // upload-only would leave a corrupt G-code on the printer's storage.
             val ctx = getApplication<Application>()
@@ -713,7 +752,8 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 }
                 val filename = PrinterRepository.resolveUploadBaseName(modelName, file.name)
                 val uploadContext = currentCoroutineContext()
-                val result = printerRepo.uploadOnly(file, filename) { sent, total ->
+                val result = printerRepo.uploadOnly(file, filename, actionContext.printerId, actionContext.connectionFingerprint,
+                    { actionContext.generation == activePrinterGeneration.get() }) { sent, total ->
                     if (uploadContext.isActive && actionContext.generation == activePrinterGeneration.get()) {
                         _uploadProgress.report(progressAttempt, sent, total)
                     }
@@ -845,6 +885,12 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         ): Boolean = started.generation == currentGeneration &&
             started.printerId == currentPrinterId &&
             started.connectionFingerprint == currentConnectionFingerprint
+
+        internal fun shouldAcceptPreparedSend(
+            expected: PrinterActionContext,
+            prepared: PrinterActionContext?,
+            currentGeneration: Int,
+        ): Boolean = prepared === expected && expected.generation == currentGeneration
 
         internal fun printerConnectionFingerprint(printer: Printer?): String? = when (printer?.kind) {
             PrinterKind.MOONRAKER -> listOf(
@@ -1021,6 +1067,14 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
             preparedSendGeneration = null
         }
 
+    private suspend fun clearRejectedSend(attempt: Long, context: PrinterActionContext) = withContext(Dispatchers.Main) {
+        if (activeUiSendAttempt == attempt && context.generation == activePrinterGeneration.get()) {
+            _uploadProgress.finish(attempt)
+            activeUiSendAttempt = null
+            _sendingState.value = SendingState.Idle
+        }
+    }
+
     private suspend fun handleUnexpectedSendFailure(
         error: Exception,
         actionContext: PrinterActionContext,
@@ -1055,6 +1109,8 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         activePrinterGeneration.incrementAndGet()
         featureDiscoveryGeneration.incrementAndGet()
         preparedSendGeneration = null
+        preparedSendContext = null
+        activeUiSendAttempt = null
         cancelActivePrinterJobs()
         _connectionState.value = ConnectionState.Unknown
         _syncState.value = SyncState.Idle

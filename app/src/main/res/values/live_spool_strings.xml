@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="live_spools_loading">Checking loaded spools…</string>
+    <string name="live_spools_unavailable">Live spool information is unavailable. Check the slots on the printer.</string>
+    <string name="live_spool_empty_label">Empty</string>
+    <string name="live_spool_unknown_label">Unknown</string>
+    <string name="live_spool_empty_warning">E%1$d is empty. Load filament before printing.</string>
+    <string name="live_spool_material_warning">Sliced as %1$s, but E%2$d has %3$s. Temperatures may not match.</string>
+</resources>

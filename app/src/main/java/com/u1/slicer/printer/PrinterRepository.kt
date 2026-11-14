@@ -53,7 +53,7 @@ class PrinterRepository(
     private val _filamentSlots = MutableStateFlow<List<FilamentSlot>>(emptyList())
     val filamentSlots: StateFlow<List<FilamentSlot>> = _filamentSlots.asStateFlow()
 
-    private var activePrinter: Printer? = null
+    @Volatile private var activePrinter: Printer? = null
     private var activeCredentialRevision = -1L
     @Volatile private var currentTransport: PrinterTransport? = null
     @Volatile private var controlBinding: Pair<String, PrinterTransport>? = null
@@ -223,19 +223,44 @@ class PrinterRepository(
 
     suspend fun uploadAndPrint(
         gcodeFile: java.io.File, filename: String, onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): TransportCommandResult = uploadAndPrint(gcodeFile, filename, null, null, { true }, onProgress)
+
+    suspend fun uploadAndPrint(
+        gcodeFile: java.io.File, filename: String,
+        expectedPrinterId: String?, expectedFingerprint: String?,
+        isStillCurrent: () -> Boolean,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): TransportCommandResult {
         val uploadName = buildPrinterUploadFilename(filename)
-        val transport = currentTransport ?: return TransportCommandResult.Failure("No printer configured")
-        return uploadAndStartJob(transport, gcodeFile, uploadName, onProgress) { currentTransport === transport }
+        val binding = controlBinding ?: return TransportCommandResult.Failure("No printer configured")
+        if (!isStillCurrent() || !matchesSendBinding(binding, expectedPrinterId, expectedFingerprint))
+            return TransportCommandResult.Failure("Active printer changed; the print was not started")
+        return uploadAndStartJob(binding.second, gcodeFile, uploadName, onProgress) {
+            isStillCurrent() && matchesSendBinding(binding, expectedPrinterId, expectedFingerprint)
+        }
     }
 
     suspend fun uploadOnly(
         gcodeFile: java.io.File, filename: String, onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): TransportCommandResult = uploadOnly(gcodeFile, filename, null, null, { true }, onProgress)
+
+    suspend fun uploadOnly(
+        gcodeFile: java.io.File, filename: String,
+        expectedPrinterId: String?, expectedFingerprint: String?,
+        isStillCurrent: () -> Boolean,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): TransportCommandResult {
         val uploadName = buildPrinterUploadFilename(filename)
-        return currentTransport?.uploadJob(gcodeFile, uploadName, onProgress)
-            ?: TransportCommandResult.Failure("No printer configured")
+        val binding = controlBinding ?: return TransportCommandResult.Failure("No printer configured")
+        if (!isStillCurrent() || !matchesSendBinding(binding, expectedPrinterId, expectedFingerprint))
+            return TransportCommandResult.Failure("Active printer changed; the upload was not started")
+        return binding.second.uploadJob(gcodeFile, uploadName, onProgress)
     }
+
+    private fun matchesSendBinding(binding: Pair<String, PrinterTransport>, expectedId: String?, expectedFingerprint: String?): Boolean =
+        controlBinding === binding && currentTransport === binding.second &&
+            (expectedId == null || binding.first == expectedId) &&
+            (expectedFingerprint == null || PrinterViewModel.printerConnectionFingerprint(activePrinter) == expectedFingerprint)
 
     suspend fun uploadAndPrintBambuProject(
         projectFile: java.io.File,
@@ -293,6 +318,14 @@ class PrinterRepository(
     }
 
     suspend fun queryFilamentSlots(): List<FilamentSlot>? = currentTransport?.queryFilamentSlots()
+
+    suspend fun queryMappingFilamentSlots(expectedPrinterId: String): List<FilamentSlot>? {
+        val binding = controlBinding ?: return null
+        if (binding.first != expectedPrinterId || binding.second !is MoonrakerTransport || currentTransport !== binding.second) return null
+        return queryBoundMappingFilaments(binding.second, isCurrent = {
+            controlBinding === binding && currentTransport === binding.second
+        })
+    }
 
     private suspend fun controlPrinter(
         expectedPrinterId: String?, command: suspend (PrinterTransport) -> TransportCommandResult,

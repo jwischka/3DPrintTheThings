@@ -380,15 +380,12 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
         queryAfcSlots()
     }
 
-    private fun queryPrintTaskConfig(): List<FilamentSlot>? {
+    private suspend fun queryPrintTaskConfig(): List<FilamentSlot>? {
         return try {
             val request = Request.Builder()
                 .url(url("/printer/objects/query?print_task_config=&filament_detect="))
                 .get().build()
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) { response.close(); return null }
-            val json = JSONObject(response.body?.string() ?: "{}")
-            response.close()
+            val json = queryFilamentJson(request) ?: return null
 
             val status = json.optJSONObject("result")?.optJSONObject("status") ?: return null
             val ptc = status.optJSONObject("print_task_config") ?: return null
@@ -423,20 +420,19 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
                 ))
             }
             slots.takeIf { it.isNotEmpty() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "print_task_config query failed")
             null
         }
     }
 
-    private fun queryAfcSlots(): List<FilamentSlot>? {
+    private suspend fun queryAfcSlots(): List<FilamentSlot>? {
         return try {
             // Discover AFC objects via /printer/objects/list
             val listReq = Request.Builder().url(url("/printer/objects/list")).get().build()
-            val listResp = client.newCall(listReq).execute()
-            if (!listResp.isSuccessful) { listResp.close(); return null }
-            val listJson = JSONObject(listResp.body?.string() ?: "{}")
-            listResp.close()
+            val listJson = queryFilamentJson(listReq) ?: return null
 
             val objects = listJson.optJSONObject("result")?.optJSONArray("objects") ?: return null
             val afcObjects = mutableListOf<String>()
@@ -451,10 +447,7 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
             // Query all AFC objects at once
             val queryStr = afcObjects.joinToString("&") { java.net.URLEncoder.encode(it, "UTF-8") + "=" }
             val afcReq = Request.Builder().url(url("/printer/objects/query?$queryStr")).get().build()
-            val afcResp = client.newCall(afcReq).execute()
-            if (!afcResp.isSuccessful) { afcResp.close(); return null }
-            val afcJson = JSONObject(afcResp.body?.string() ?: "{}")
-            afcResp.close()
+            val afcJson = queryFilamentJson(afcReq) ?: return null
 
             val afcStatus = afcJson.optJSONObject("result")?.optJSONObject("status") ?: return null
             val slots = mutableListOf<FilamentSlot>()
@@ -477,10 +470,45 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
                 ))
             }
             slots.takeIf { it.isNotEmpty() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "AFC query failed")
             null
         }
+    }
+
+    /** Cancel the actual call when a mapping refresh or settings sync is cancelled. */
+    private suspend fun queryFilamentJson(request: Request): JSONObject? = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resume(null)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = try {
+                    response.use responseUse@{
+                        if (!it.isSuccessful) return@responseUse null
+                        val body = it.body ?: return@responseUse null
+                        if (body.contentLength() > 1024 * 1024) return@responseUse null
+                        val bytes = java.io.ByteArrayOutputStream()
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(8192)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                if (bytes.size() + count > 1024 * 1024) return@responseUse null
+                                bytes.write(buffer, 0, count)
+                            }
+                        }
+                        JSONObject(bytes.toString(Charsets.UTF_8.name()))
+                    }
+                } catch (_: Exception) { null }
+                if (continuation.isActive) continuation.resume(result)
+            }
+        })
     }
 
     /** Convert Bambu RGBA hex (e.g. "E72F1DFF") to #RRGGBB */

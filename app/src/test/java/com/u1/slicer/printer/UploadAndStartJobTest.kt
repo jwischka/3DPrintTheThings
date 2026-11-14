@@ -53,6 +53,12 @@ class UploadAndStartJobTest {
         assertEquals(listOf("validate", "upload:saved.gcode", "validate", "start:saved.gcode", "hint"), fake.calls)
     }
 
+    @Test fun staleBindingDoesNotValidateOrUpload() = runBlocking<Unit> {
+        val fake = FakeTransport()
+        assertTrue(execute(fake) { false } is TransportCommandResult.Failure)
+        assertTrue(fake.calls.isEmpty())
+    }
+
     @Test fun preflightFailurePreventsUploadAndStateFlipPreventsStart() = runBlocking<Unit> {
         val failure = TransportCommandResult.Failure("printer busy")
         val beforeUpload = FakeTransport().apply { validate = { failure } }

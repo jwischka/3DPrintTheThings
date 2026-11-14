@@ -69,6 +69,7 @@ import com.u1.slicer.slice.isCompatibleWith
 import com.u1.slicer.ui.JobsScreen
 import com.u1.slicer.ui.PrinterScreen
 import com.u1.slicer.ui.SettingsScreen
+import com.u1.slicer.u1.LiveSpoolState
 import com.u1.slicer.viewer.MeshData
 import com.u1.slicer.viewer.NativePreviewMesh
 import com.u1.slicer.slice.capabilityProfileFor
@@ -1013,6 +1014,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 pendingMappingSend?.let { pending ->
+                    val mappingPrinter = remember(pending) { previewActivePrinter }
+                    LaunchedEffect(previewActivePrinter, mappingPrinter) {
+                        if (mappingPrinter == null || previewActivePrinter != mappingPrinter) pendingMappingSend = null
+                    }
+                    if (mappingPrinter == null || previewActivePrinter != mappingPrinter) return@let
                     // Phase 2 (2026-04-28, revised after adversarial review)
                     // — three-state canonical lookup. The lookup runs on
                     // Dispatchers.IO via produceState, so the initial
@@ -1155,7 +1161,11 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             else viewModel.sliceTimeMaterials(canonical, currentMapping),
                                             physicalToolSpace = uploadPhysicalSlotSpace,
-                                            onConfirm = {
+                                            onConfirm = confirm@{
+                                                if (previewActivePrinter != mappingPrinter) {
+                                                    pendingMappingSend = null
+                                                    return@confirm
+                                                }
                                                 val sourceFile = java.io.File(pending.gcodePath)
                                                 val heldFile = java.io.File(
                                                     sourceFile.parentFile,
@@ -1163,7 +1173,7 @@ class MainActivity : ComponentActivity() {
                                                 )
                                                 pendingMappingSend = null
                                                 navigateTab(Routes.PRINTER)
-                                                printerViewModel.beginSendPreparing()
+                                                val sendContext = printerViewModel.beginSendPreparing(mappingPrinter)
                                                 sendActionScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                                     // Foreground service across the large-file
                                                     // copy so the freezer can't kill it once
@@ -1190,7 +1200,7 @@ class MainActivity : ComponentActivity() {
                                                         throw ce
                                                     } catch (t: Throwable) {
                                                         withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.Main) {
-                                                            printerViewModel.reportSendError("Couldn't prepare G-code: ${t.message ?: "unknown error"}")
+                                                        printerViewModel.reportSendError("Couldn't prepare G-code: ${t.message ?: "unknown error"}", sendContext)
                                                         }
                                                         return@launch
                                                     } finally {
@@ -1198,7 +1208,7 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                     val modelName = viewModel.modelFileName.value
                                                     withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                        printerViewModel.sendUploadOnly(physical, modelName)
+                                                        printerViewModel.sendUploadOnly(physical, modelName, sendContext)
                                                     }
                                                 }
                                             },
@@ -1206,6 +1216,19 @@ class MainActivity : ComponentActivity() {
                                         )
                                     }
                                     PendingMappingSend.Action.PrintAndUpload -> {
+                                val liveSpools = remember(pending, mappingPrinter) {
+                                    mutableStateOf<LiveSpoolState>(LiveSpoolState.Loading)
+                                }
+                                LaunchedEffect(pending, mappingPrinter) {
+                                    val slots = mappingPrinter?.takeIf { it.kind == PrinterKind.MOONRAKER }?.let {
+                                        printerViewModel.queryMappingFilamentSlots(it.id)
+                                    }
+                                    liveSpools.value = if (slots.isNullOrEmpty()) {
+                                        LiveSpoolState.Unavailable
+                                    } else {
+                                        LiveSpoolState.Ready(slots)
+                                    }
+                                }
                                 // B144: mix slices win for Print — show physical slots
                                 // (the body is already physical-slot space), not file
                                 // filaments. Falls back to the canonical narrowing.
@@ -1246,9 +1269,14 @@ class MainActivity : ComponentActivity() {
                                         }
                                     else viewModel.sliceTimeMaterials(canonical, currentMapping),
                                     physicalSlotSpace = mixSlotSpace,
+                                    liveSpoolState = liveSpools.value,
                                     activeNickname = activeNickname,
                                     showNicknameInTitle = printerCount > 1,
-                                    onConfirm = { plateMapping ->
+                                    onConfirm = confirm@{ plateMapping ->
+                                        if (previewActivePrinter != mappingPrinter) {
+                                            pendingMappingSend = null
+                                            return@confirm
+                                        }
                                         val sourceFile = java.io.File(pending.gcodePath)
                                         val remappedFile = java.io.File(
                                             sourceFile.parentFile,
@@ -1278,7 +1306,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                         pendingMappingSend = null
                                         navigateTab(Routes.PRINTER)
-                                        printerViewModel.beginSendPreparing()
+                                        val sendContext = printerViewModel.beginSendPreparing(mappingPrinter)
                                         sendActionScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                             // Foreground service across the ~80 s
                                             // remap of a large G-code so the freezer
@@ -1302,7 +1330,7 @@ class MainActivity : ComponentActivity() {
                                                 throw ce
                                             } catch (t: Throwable) {
                                                 withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.Main) {
-                                                    printerViewModel.reportSendError("Couldn't prepare G-code: ${t.message ?: "unknown error"}")
+                                                    printerViewModel.reportSendError("Couldn't prepare G-code: ${t.message ?: "unknown error"}", sendContext)
                                                 }
                                                 return@launch
                                             } finally {
@@ -1310,7 +1338,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                             val modelName = viewModel.modelFileName.value
                                             withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                printerViewModel.sendAndPrint(physical, modelName)
+                                                printerViewModel.sendAndPrint(physical, modelName, sendContext)
                                             }
                                         }
                                     },
@@ -1335,7 +1363,7 @@ class MainActivity : ComponentActivity() {
                             )
                             pendingMappingSend = null
                             navigateTab(Routes.PRINTER)
-                            printerViewModel.beginSendPreparing()
+                            val sendContext = printerViewModel.beginSendPreparing(mappingPrinter)
                             sendActionScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                 // Phase 2 B.1 — Absent canonical path
                                 // means legacy/unrecognised file. Treat
@@ -1353,7 +1381,7 @@ class MainActivity : ComponentActivity() {
                                     throw ce
                                 } catch (t: Throwable) {
                                     withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.Main) {
-                                        printerViewModel.reportSendError("Couldn't prepare G-code: ${t.message ?: "unknown error"}")
+                                        printerViewModel.reportSendError("Couldn't prepare G-code: ${t.message ?: "unknown error"}", sendContext)
                                     }
                                     return@launch
                                 } finally {
@@ -1364,9 +1392,9 @@ class MainActivity : ComponentActivity() {
                                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                                     when (pending.action) {
                                         PendingMappingSend.Action.PrintAndUpload ->
-                                            printerViewModel.sendAndPrint(physical, modelName)
+                                            printerViewModel.sendAndPrint(physical, modelName, sendContext)
                                         PendingMappingSend.Action.UploadOnly ->
-                                            printerViewModel.sendUploadOnly(physical, modelName)
+                                            printerViewModel.sendUploadOnly(physical, modelName, sendContext)
                                     }
                                 }
                             }

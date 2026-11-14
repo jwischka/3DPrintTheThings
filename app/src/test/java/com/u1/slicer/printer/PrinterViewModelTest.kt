@@ -14,6 +14,18 @@ import org.junit.Test
 
 class PrinterViewModelTest {
     @Test
+    fun `prepared send must still own the generation and preparation`() {
+        val first = PrinterViewModel.PrinterActionContext(3, "printer-a", "endpoint-a")
+        val later = first.copy()
+        assertTrue(PrinterViewModel.shouldAcceptPreparedSend(first, first, 3))
+        assertFalse(PrinterViewModel.shouldAcceptPreparedSend(first, first, 4))
+        assertFalse(PrinterViewModel.shouldAcceptPreparedSend(first, null, 3))
+        assertFalse(PrinterViewModel.shouldAcceptPreparedSend(first, later, 3))
+        assertFalse(PrinterViewModel.shouldApplyPrinterActionResult(first, 3, "printer-b", "endpoint-b"))
+        assertFalse(PrinterViewModel.shouldApplyPrinterActionResult(first, 3, "printer-a", "changed-endpoint"))
+    }
+
+    @Test
     fun `switch eligibility uses saved printer configuration`() {
         val config = PrintersConfig(
             printers = listOf(

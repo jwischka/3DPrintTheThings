@@ -16,6 +16,8 @@ The client attaches `X-Api-Key` only within the configured scheme, host, port an
 
 ## Upload and start
 
+U1 send preparation carries a frozen printer ID, connection fingerprint and generation through G-code remapping. A printer switch cannot retarget a completed remap to the newly selected printer. The repository captures the matching transport before upload and rechecks that binding before starting a print.
+
 Uploads stream the file once, report file-payload bytes, and remain pending until the server confirms a recognizable Moonraker upload response. Body completion is not upload success. Cancellation cancels the underlying HTTP call. Uploads do not automatically follow redirects or replay POSTs after an I/O error: a lost response cannot establish whether the server accepted the file.
 
 Progress is associated with a specific send attempt. Late callbacks and cleanup from an earlier canceled attempt cannot change the next attempt's UI.
@@ -25,6 +27,12 @@ Progress is associated with a specific send attempt. Late callbacks and cleanup 
 The coordinator checks cancellation and transport identity after each pre-start suspension. A switch after a start request has an uncertain outcome and is not reported as proof that printing did not start. Preflight is a snapshot; firmware remains the final authority on accepting a start.
 
 Cancellation requires confirmation for the displayed printer, and pause/resume/cancel failures appear on screen. Camera JPEG decoding runs off the UI thread; the camera wakeup loop is used only for the `camera/monitor.jpg` fallback.
+
+## Live spool mapping
+
+Opening the U1 print mapping dialog requests fresh spool information once, with an eight-second aggregate timeout and cancellation of the underlying HTTP call. Results are bound to the selected printer and transport. Loading and unavailable states are explicit; cached slot data is not presented as a fresh response.
+
+Live loaded-slot colors and materials inform the picker and color suggestions. They do not replace saved slicing presets or the material recorded at slice time. Empty-slot and material-mismatch notices are advisory. A delayed response preserves a supplied mapping or a manual selection; automatic suggestions apply only to an untouched dialog without an initial mapping. An explicit suggestion uses loaded candidates with usable colors and retains the current mapping when none are available.
 
 ## Verification boundary
 

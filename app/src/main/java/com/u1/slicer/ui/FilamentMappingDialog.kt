@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -21,9 +22,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.u1.slicer.data.CanonicalFilamentList
+import com.u1.slicer.R
 import com.u1.slicer.data.ExtruderPreset
 import com.u1.slicer.data.FilamentSource
 import com.u1.slicer.network.NozzleSide
+import com.u1.slicer.network.FilamentSlot
+import com.u1.slicer.u1.LiveSpoolState
+import com.u1.slicer.u1.LiveSlotWarning
+import com.u1.slicer.u1.liveDisplayPresets
+import com.u1.slicer.u1.liveSlotWarning
+import com.u1.slicer.u1.suggestLiveSpoolMapping
 
 internal fun shouldShowFilamentMappingNickname(
     showNicknameInTitle: Boolean,
@@ -108,6 +116,7 @@ fun FilamentMappingDialog(
     supportingText: String? = null,
     confirmLabel: String = "Send to Printer",
     invalidMappingMessage: ((List<Int>) -> String?)? = null,
+    liveSpoolState: LiveSpoolState? = null,
 ) {
     // M3 from post-Buzz code review (2026-04-30): when [plateFileIndices] is
     // supplied it MUST be the same size as [canonicalList.filaments], because
@@ -118,9 +127,13 @@ fun FilamentMappingDialog(
         "FilamentMappingDialog: plateFileIndices.size (${plateFileIndices?.size}) " +
             "must match canonicalList.size (${canonicalList.size})"
     }
+    val validInitialMapping = initialMapping != null && initialMapping.size == canonicalList.size &&
+        (liveSpoolState == null || initialMapping.all { slot -> extruderPresets.any { it.index == slot } })
+    val readySlots = (liveSpoolState as? LiveSpoolState.Ready)?.slots
+    val displayPresets = if (readySlots != null) liveDisplayPresets(extruderPresets, readySlots) else extruderPresets
     val mapping = remember(canonicalList, extruderPresets, initialMapping, requiredNozzleSides, slotNozzleRoutes) {
-        val seed = if (initialMapping != null && initialMapping.size == canonicalList.size) {
-            initialMapping
+        val seed = if (validInitialMapping) {
+            initialMapping!!
         } else if (requiredNozzleSides.isNotEmpty()) {
             autoSuggestSideAwareMapping(
                 canonicalList = canonicalList,
@@ -132,6 +145,14 @@ fun FilamentMappingDialog(
             autoSuggestMapping(canonicalList, extruderPresets)
         }
         seed.toMutableStateList()
+    }
+    var mappingTouched by remember(mapping) { mutableStateOf(false) }
+    LaunchedEffect(readySlots) {
+        if (readySlots != null && !validInitialMapping && !mappingTouched && requiredNozzleSides.isEmpty()) {
+            val fresh = suggestLiveSpoolMapping(canonicalList, extruderPresets, readySlots, mapping.toList())
+            mapping.clear()
+            mapping.addAll(fresh)
+        }
     }
     val validationMessage = invalidMappingMessage?.invoke(mapping.toList())
 
@@ -178,6 +199,20 @@ fun FilamentMappingDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(12.dp))
+
+                when (liveSpoolState) {
+                    LiveSpoolState.Loading -> Text(
+                        stringResource(R.string.live_spools_loading),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LiveSpoolState.Unavailable -> Text(
+                        stringResource(R.string.live_spools_unavailable),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    else -> Unit
+                }
 
                 LazyColumn(
                     // Keep one- and two-filament H2D mappings compact. The
@@ -229,11 +264,13 @@ fun FilamentMappingDialog(
                             overrideMaterial = filamentMaterialOverrides[displayFileIndex],
                             sliceTimeSlotMaterial = sliceTimeSlotMaterial,
                             sourceLabel = sourceShortLabel(entry.source),
-                            extruderPresets = extruderPresets,
+                            extruderPresets = displayPresets,
+                            liveSlots = readySlots,
                             selectedSlot = mapping.getOrElse(idx) { 0 },
                             requiredNozzleSide = requiredNozzleSides.getOrElse(idx) { NozzleSide.UNKNOWN },
                             slotNozzleRoutes = slotNozzleRoutes,
                             onSlotPicked = { slot ->
+                                mappingTouched = true
                                 if (idx < mapping.size) mapping[idx] = slot
                             },
                         )
@@ -281,7 +318,12 @@ fun FilamentMappingDialog(
                 // Auto-suggest reset
                 OutlinedButton(
                     onClick = {
-                        val fresh = if (requiredNozzleSides.isNotEmpty()) {
+                        val fresh = if (readySlots != null && requiredNozzleSides.isEmpty()) {
+                            suggestLiveSpoolMapping(
+                                canonicalList, extruderPresets, readySlots,
+                                mapping.toList(),
+                            )
+                        } else if (requiredNozzleSides.isNotEmpty()) {
                             autoSuggestSideAwareMapping(
                                 canonicalList = canonicalList,
                                 extruderPresets = extruderPresets,
@@ -293,6 +335,7 @@ fun FilamentMappingDialog(
                         }
                         mapping.clear()
                         mapping.addAll(fresh)
+                        mappingTouched = true
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
@@ -349,6 +392,7 @@ private fun FilamentMappingRow(
     sliceTimeSlotMaterial: String?,
     sourceLabel: String?,
     extruderPresets: List<ExtruderPreset>,
+    liveSlots: List<FilamentSlot>? = null,
     selectedSlot: Int,
     requiredNozzleSide: NozzleSide = NozzleSide.UNKNOWN,
     slotNozzleRoutes: Map<Int, BambuSlotNozzleRoute> = emptyMap(),
@@ -358,6 +402,9 @@ private fun FilamentMappingRow(
     // For the mismatch warning, resolve from the physical presets.
     val selectedPreset =
         extruderPresets.firstOrNull { it.index == selectedSlot } ?: extruderPresets.firstOrNull()
+    val selectedLiveSlot = liveSlots?.firstOrNull { it.index == selectedSlot }
+    val emptyLabel = stringResource(R.string.live_spool_empty_label)
+    val unknownLabel = stringResource(R.string.live_spool_unknown_label)
 
     // Phase 2.8 — material mismatch detection.
     // Reconstructs the effective material the G-code was sliced with, following
@@ -374,6 +421,7 @@ private fun FilamentMappingRow(
     val mismatch = slicedWithMaterial != null
         && slotMaterial != null
         && !slicedWithMaterial.equals(slotMaterial, ignoreCase = true)
+    val liveWarning = if (liveSlots != null) liveSlotWarning(selectedLiveSlot, slicedWithMaterial) else null
     val selectedRoute = slotNozzleRoutes[selectedSlot]
     val nozzleMismatch = !isBambuSlotCompatibleWithNozzle(requiredNozzleSide, selectedRoute)
 
@@ -435,7 +483,11 @@ private fun FilamentMappingRow(
                     value = buildString {
                         append(selectedPreset?.label ?: "E1")
                         append(" · ")
-                        append(selectedPreset?.materialType ?: "PLA")
+                        append(when {
+                            selectedLiveSlot?.loaded == false -> emptyLabel
+                            liveSlots != null && selectedPreset?.materialType.isNullOrBlank() -> unknownLabel
+                            else -> selectedPreset?.materialType ?: "PLA"
+                        })
                         selectedRoute?.takeIf { it.side != NozzleSide.UNKNOWN || it.switchable }?.let { route ->
                             append(" · ")
                             append(if (route.switchable) "FTS" else nozzleSideLabel(route.side).removeSuffix(" nozzle"))
@@ -450,7 +502,8 @@ private fun FilamentMappingRow(
                                 .size(16.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    selectedPreset?.let { parseHexColor(it.color) } ?: Color.White
+                                    if (selectedLiveSlot?.loaded == false) Color.Gray
+                                    else selectedPreset?.let { parseHexColor(it.color) } ?: Color.White
                                 )
                         )
                     },
@@ -465,6 +518,7 @@ private fun FilamentMappingRow(
                     extruderPresets.forEach { preset ->
                         val route = slotNozzleRoutes[preset.index]
                         val compatible = isBambuSlotCompatibleWithNozzle(requiredNozzleSide, route)
+                        val slotIsEmpty = liveSlots?.firstOrNull { it.index == preset.index }?.loaded == false
                         DropdownMenuItem(
                             text = {
                                 Row(
@@ -475,7 +529,7 @@ private fun FilamentMappingRow(
                                         modifier = Modifier
                                             .size(14.dp)
                                             .clip(CircleShape)
-                                            .background(parseHexColor(preset.color))
+                                            .background(if (slotIsEmpty) Color.Gray else parseHexColor(preset.color))
                                             .border(
                                                 0.5.dp,
                                                 MaterialTheme.colorScheme.outline,
@@ -484,7 +538,7 @@ private fun FilamentMappingRow(
                                     )
                                     Text(
                                         buildString {
-                                            append("${preset.label} · ${preset.materialType}")
+                                            append("${preset.label} · ${if (slotIsEmpty) emptyLabel else if (liveSlots != null && preset.materialType.isBlank()) unknownLabel else preset.materialType}")
                                             route?.takeIf { it.side != NozzleSide.UNKNOWN || it.switchable }?.let {
                                                 append(" · ")
                                                 append(if (it.switchable) "FTS" else nozzleSideLabel(it.side).removeSuffix(" nozzle"))
@@ -502,7 +556,30 @@ private fun FilamentMappingRow(
                 }
             }
     }
-        if (mismatch) {
+        if (liveWarning == LiveSlotWarning.EMPTY) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(6.dp),
+            ) {
+                Text(
+                    stringResource(R.string.live_spool_empty_warning, selectedSlot + 1),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        } else if (liveWarning == LiveSlotWarning.MATERIAL_MISMATCH) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(6.dp),
+            ) {
+                Text(
+                    stringResource(R.string.live_spool_material_warning, slicedWithMaterial ?: "",
+                        selectedSlot + 1, selectedLiveSlot?.materialType ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        } else if (liveSlots == null && mismatch) {
             // Material-mismatch chip — non-blocking advisory.
             Surface(
                 color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
