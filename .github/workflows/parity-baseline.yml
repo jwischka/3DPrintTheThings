@@ -10,6 +10,7 @@ on:
 jobs:
   capture-u1-cube:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,6 +34,10 @@ jobs:
             'resources/profiles/Snapmaker/machine' \
             'resources/profiles/Snapmaker/process' \
             'resources/profiles/Snapmaker/filament'
+      - name: Install headless OpenGL runtime dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libopengl0
       - name: Slice deterministic U1 fixture headlessly
         env:
           QT_QPA_PLATFORM: offscreen
@@ -44,10 +49,12 @@ jobs:
           process="$profile/process/0.20 Standard @Snapmaker U1 (0.4 nozzle).json"
           filament="$profile/filament/Generic PLA @U1 0.4 nozzle.json"
           mkdir -p parity-output
+          mkdir -p parity-output
           squashfs-root/AppRun tools/parity/fixtures/cube_10mm.stl \
             --load-settings "$process;$machine" \
             --load-filaments "$filament" \
-            --slice 0 --outputdir parity-output
+            --slice 0 --outputdir parity-output \
+            2>&1 | tee parity-output/orca-cli.log
           gcode=$(find parity-output -type f -name '*.gcode' -print -quit)
           test -n "$gcode"
           input_hash=$(sha256sum tools/parity/fixtures/cube_10mm.stl | cut -d' ' -f1)
@@ -59,8 +66,9 @@ jobs:
             --preset-file "$machine" --preset-file "$process" --preset-file "$filament"
           python tools/parity/parity.py inspect "$gcode" > parity-output/desktop-gcode-metrics.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: desktop-orca-u1-cube-baseline-v2.5.0
           path: parity-output/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
