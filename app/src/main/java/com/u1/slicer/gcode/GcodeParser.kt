@@ -27,6 +27,14 @@ object GcodeParser {
         colorSegmentsByPausePrint: Boolean = false,
         maxMoves: Int = DEFAULT_MAX_MOVES
     ): ParsedGcode {
+        // Pick one layer boundary rule for the whole file. A marker can follow
+        // start G-code moves, while Z hops within marked layers are not layers.
+        val hasLayerMarkers = BufferedReader(FileReader(file)).use { reader ->
+            reader.lineSequence().any { line ->
+                val start = line.indexOfFirst { it != ' ' }
+                start >= 0 && isLayerMarker(line, start)
+            }
+        }
         // Estimate total moves from file size.  Use 16 bytes/line (conservative lower
         // bound) so we overestimate the move count — this produces a higher stride,
         // which is the safe direction (stores fewer moves, stays well under maxMoves).
@@ -39,6 +47,10 @@ object GcodeParser {
         val layers = mutableListOf<GcodeLayer>()
         val currentMoves = ArrayList<GcodeMove>(512) // reused across layers, avoids re-allocation
         var currentZ = 0f
+        var layerZ = 0f
+        var markerSeen = false
+        var layerZFromComment = false
+        var extrudedInLayer = false
         var layerIndex = 0
         var totalMovesCount = 0
         var storedMovesCount = 0
@@ -95,11 +107,25 @@ object GcodeParser {
                             pausePrintSegmentsBumped++
                         }
                     }
-                    if (startsWithAt(l, start, ";LAYER_CHANGE") || startsWithAt(l, start, "; layer_change")) {
-                        if (currentMoves.isNotEmpty() || hasUnflushedMoves) {
-                            layers.add(GcodeLayer(layerIndex++, currentZ, currentMoves.toList()))
+                    if (hasLayerMarkers && isLayerMarker(l, start)) {
+                        // A printing region before the first marker is its own
+                        // layer; start-G-code travel alone belongs to layer one.
+                        if ((markerSeen || extrudedInLayer) &&
+                            (currentMoves.isNotEmpty() || hasUnflushedMoves)) {
+                            layers.add(GcodeLayer(layerIndex++, layerZ, currentMoves.toList()))
                             currentMoves.clear()
                             hasUnflushedMoves = false
+                        }
+                        markerSeen = true
+                        layerZ = currentZ
+                        layerZFromComment = false
+                        extrudedInLayer = false
+                    } else if (hasLayerMarkers && markerSeen &&
+                        !extrudedInLayer && startsWithAt(l, start, ";Z:")) {
+                        val z = l.substring(start + 3).trim().toFloatOrNull()
+                        if (z != null && z.isFinite()) {
+                            layerZ = z
+                            layerZFromComment = true
                         }
                     }
                     if (perExtruderMm.isEmpty() && startsWithAt(l, start, "; filament used [mm]")) {
@@ -180,17 +206,25 @@ object GcodeParser {
                         }
 
                         if (newZ != currentZ) {
-                            if (currentMoves.isNotEmpty() || hasUnflushedMoves) {
+                            if (!hasLayerMarkers && (currentMoves.isNotEmpty() || hasUnflushedMoves)) {
                                 layers.add(GcodeLayer(layerIndex++, currentZ, currentMoves.toList()))
                                 currentMoves.clear()
                                 hasUnflushedMoves = false
                             }
                             currentZ = newZ
+                            if (hasLayerMarkers && markerSeen &&
+                                !layerZFromComment && !extrudedInLayer) layerZ = newZ
                         }
 
                         val hasE = !newE.isNaN()
                         val eBefore = lastE
                         val isExtrude = hasE && if (absoluteE) newE > eBefore else newE > 0f
+                        // E-only unretraction can happen at hop height. Freeze
+                        // the inferred layer Z at the first printed XY move.
+                        if (isExtrude && (newX != x || newY != y)) {
+                            if (hasLayerMarkers && !markerSeen && !extrudedInLayer) layerZ = currentZ
+                            extrudedInLayer = true
+                        }
                         if (hasE) lastE = newE
 
                         if (newX != x || newY != y) {
@@ -284,7 +318,7 @@ object GcodeParser {
         }
 
         if (currentMoves.isNotEmpty() || hasUnflushedMoves) {
-            layers.add(GcodeLayer(layerIndex, currentZ, currentMoves.toList()))
+            layers.add(GcodeLayer(layerIndex, if (hasLayerMarkers) layerZ else currentZ, currentMoves.toList()))
         }
 
         val hasComputedExtrusion = computedPerExtruderMm.any { it > 0f }
@@ -335,6 +369,15 @@ object GcodeParser {
         if (offset + prefix.length > s.length) return false
         for (i in prefix.indices) if (s[offset + i] != prefix[i]) return false
         return true
+    }
+
+    private fun isLayerMarker(s: String, offset: Int): Boolean =
+        isTokenAt(s, offset, ";LAYER_CHANGE") || isTokenAt(s, offset, "; layer_change")
+
+    private fun isTokenAt(s: String, offset: Int, token: String): Boolean {
+        val end = offset + token.length
+        return startsWithAt(s, offset, token) &&
+            (end == s.length || s[end] == ' ' || s[end] == '\t')
     }
 
     /** Parse a G-code float in s[start..<end] with no String allocation. */

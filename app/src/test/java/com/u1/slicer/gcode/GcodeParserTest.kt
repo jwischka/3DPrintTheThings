@@ -119,6 +119,102 @@ class GcodeParserTest {
     }
 
     @Test
+    fun `marked layers ignore Z hops and use layer Z metadata`() {
+        val file = writeGcode("""
+            ;LAYER_CHANGE
+            ;Z:0.3
+            G1 Z0.3
+            G1 X1 Y1 E1
+            G1 Z0.7
+            G1 X2 Y2
+            G1 Z0.3
+            G1 X3 Y3 E2
+            ;LAYER_CHANGE
+            ;Z:0.5
+            G1 Z0.9
+            G1 X4 Y4
+            G1 Z0.5
+            G1 X5 Y5 E3
+        """.trimIndent())
+
+        val result = GcodeParser.parse(file)
+        assertEquals(2, result.layers.size)
+        assertEquals(0.3f, result.layers[0].z, 0.001f)
+        assertEquals(0.5f, result.layers[1].z, 0.001f)
+        assertEquals(3, result.layers[0].moves.size)
+        assertEquals(2, result.layers[1].moves.size)
+        assertEquals(5, result.totalMoves)
+    }
+
+    @Test
+    fun `late first marker keeps start moves in first marked layer`() {
+        val file = writeGcode("""
+            G1 Z5
+            G1 X1 Y1
+            G1 Z0.3
+            ;LAYER_CHANGE
+            ;Z:0.3
+            G1 X2 Y2 E1
+            ;LAYER_CHANGE
+            ;Z:0.5
+            G1 X3 Y3 E2
+        """.trimIndent())
+
+        val result = GcodeParser.parse(file)
+        assertEquals(2, result.layers.size)
+        assertEquals(0.3f, result.layers[0].z, 0.001f)
+        assertEquals(2, result.layers[0].moves.size)
+        assertEquals(0.5f, result.layers[1].z, 0.001f)
+    }
+
+    @Test
+    fun `marker without Z metadata uses printed height after unretraction`() {
+        val file = writeGcode("""
+            ; layer_change
+            G1 Z0.9
+            G1 E0.2
+            G1 Z0.5
+            G1 X1 Y1 E0.5
+            G1 Z0.9
+            G1 X2 Y2
+        """.trimIndent())
+
+        val result = GcodeParser.parse(file)
+        assertEquals(1, result.layers.size)
+        assertEquals(0.5f, result.layers[0].z, 0.001f)
+        assertEquals(2, result.totalMoves)
+    }
+
+    @Test
+    fun `unmarked files still split on Z changes`() {
+        val file = writeGcode("""
+            G1 Z0.3
+            G1 X1 Y1 E1
+            G1 Z0.7
+            G1 X2 Y2
+            G1 Z0.3
+            G1 X3 Y3 E2
+        """.trimIndent())
+
+        val result = GcodeParser.parse(file)
+        assertEquals(listOf(0.3f, 0.7f, 0.3f), result.layers.map { it.z })
+        assertEquals(3, result.totalMoves)
+    }
+
+    @Test
+    fun `similarly named comment is not a layer marker`() {
+        val file = writeGcode("""
+            ;LAYER_CHANGE_EXAMPLE
+            G1 Z0.3
+            G1 X1 Y1 E1
+            G1 Z0.5
+            G1 X2 Y2 E2
+        """.trimIndent())
+
+        assertEquals(listOf(0.3f, 0.5f), GcodeParser.parse(file).layers.map { it.z })
+    }
+
+    @Test
     fun `parse extruder changes tracked correctly`() {
         val file = writeGcode("""
             G1 Z0.3

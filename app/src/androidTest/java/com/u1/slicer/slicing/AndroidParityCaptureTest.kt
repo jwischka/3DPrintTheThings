@@ -70,6 +70,9 @@ class AndroidParityCaptureTest {
             assertTrue("Native G-code is missing or empty", generated.isFile && generated.length() > 0)
             val summary = GcodeValidator.summarizeParsedOutput(GcodeParser.parse(generated))
             assertTrue("Slice must contain printable model extrusion", !GcodeValidator.isEffectivelyEmpty(summary))
+            val layerMarkers = generated.useLines { lines -> lines.count { it.trim() == ";LAYER_CHANGE" } }
+            assertEquals("Expected cube layer markers", 49, layerMarkers)
+            assertEquals("Parsed layers must match G-code layer markers", layerMarkers, summary.layerCount)
             generated.copyTo(outputGcode)
             assertTrue("Captured G-code is empty", outputGcode.length() > 0)
 

@@ -16,6 +16,10 @@ restores both with an exact key and stops if either is absent. A separate
 compiler cache accelerates rebuilding the same engine pin but is not a source
 of dependencies.
 
+The JNI engine version string currently contains a hardcoded Android ARM64
+label even for x86_64 builds. Use the recorded artifact hash and build ABI for
+binary provenance rather than inferring architecture from that string.
+
 The build overlays the restored base prefix through symlinks in its disposable
 `extern` directory, copies the checked-in serial TBB shim, and adds real NLopt,
 JPEG, PNG, crypto, and libnoise libraries from the extra prefix. CMake compiles the pinned
