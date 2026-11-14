@@ -225,7 +225,7 @@ class BambuLanTransportTest {
     @Test
     fun `start wires client reports into transport flows and stop disconnects client`() = runBlocking {
         val client = FakeBambuLanClient()
-        val transport = BambuLanTransport(validConfig(), client)
+        val transport = BambuLanTransport(validConfig(), client, cameraClient = FakeBambuCameraClient(supported = false))
 
         transport.start(CoroutineScope(Dispatchers.Unconfined))
         client.emitReport(
@@ -251,6 +251,7 @@ class BambuLanTransportTest {
         val transport = BambuLanTransport(
             validConfig(),
             FakeBambuLanClient(startFailure = IllegalStateException("boom")),
+            cameraClient = FakeBambuCameraClient(supported = false),
         )
 
         transport.start(CoroutineScope(Dispatchers.Unconfined))
@@ -265,6 +266,7 @@ class BambuLanTransportTest {
         val transport = BambuLanTransport(
             config = validConfig(),
             client = client,
+            cameraClient = FakeBambuCameraClient(supported = false),
             connectionRetryDelayMs = 0,
         )
 
@@ -292,7 +294,7 @@ class BambuLanTransportTest {
     @Test
     fun `pause resume and cancel publish via live bambu client`() = runBlocking {
         val client = FakeBambuLanClient(testConnectionResult = null)
-        val transport = BambuLanTransport(validConfig(), client)
+        val transport = BambuLanTransport(validConfig(), client, cameraClient = FakeBambuCameraClient(supported = false))
         transport.start(CoroutineScope(Dispatchers.Unconfined))
 
         assertEquals(TransportCommandResult.Success, transport.pauseJob())
