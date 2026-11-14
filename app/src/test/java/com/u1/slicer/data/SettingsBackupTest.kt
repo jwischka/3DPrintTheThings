@@ -238,6 +238,88 @@ class SettingsBackupTest {
     }
 
     @Test
+    fun `default export omits cookies and Bambu access codes while opt in includes them`() {
+        val printer = Printer(
+            id = "bambu-1", nickname = "Bambu", kind = PrinterKind.BAMBU_LAN,
+            bambu = BambuConfig("192.168.1.5", "access-secret", "serial-1", BambuModel.P1S),
+        )
+        val data = SettingsBackup.BackupData(
+            sliceConfig = null, slicingOverrides = null,
+            printersConfig = PrintersConfig(listOf(printer), printer.id), filamentProfiles = null,
+            makerWorldCookies = "session=secret",
+        )
+        val ordinary = JSONObject(SettingsBackup.export(data))
+        assertFalse(ordinary.has("makerWorldCookies"))
+        val ordinaryBambu = ordinary.getJSONArray("printers").getJSONObject(0).getJSONObject("bambu")
+        assertEquals("", ordinaryBambu.getString("accessCode"))
+        assertTrue(ordinaryBambu.getBoolean("accessCodeOmitted"))
+        assertEquals("", BambuConfig.fromJsonObject(ordinaryBambu).accessCode)
+        assertEquals("serial-1", ordinaryBambu.getString("serial"))
+        assertFalse(ordinary.toString().contains("access-secret"))
+        assertFalse(ordinary.toString().contains("session=secret"))
+        val sanitizedImport = SettingsBackup.import(ordinary.toString())
+        assertEquals(setOf("bambu-1"), sanitizedImport.printerIdsWithoutAccessCode)
+        assertEquals("access-secret", SettingsBackup.restoreMissingCredentials(sanitizedImport, data.printersConfig)
+            .active.bambu!!.accessCode)
+
+        val sensitive = JSONObject(SettingsBackup.export(data, includeCredentials = true))
+        assertEquals("session=secret", sensitive.getString("makerWorldCookies"))
+        assertEquals("access-secret", sensitive.getJSONArray("printers").getJSONObject(0)
+            .getJSONObject("bambu").getString("accessCode"))
+        assertFalse(sensitive.getJSONArray("printers").getJSONObject(0)
+            .getJSONObject("bambu").has("accessCodeOmitted"))
+        val roundTrip = SettingsBackup.import(sensitive.toString())
+        assertEquals("access-secret", roundTrip.printersConfig!!.active.bambu!!.accessCode)
+        assertEquals("session=secret", roundTrip.makerWorldCookies)
+    }
+
+    @Test
+    fun `missing access code preserves only matching local printer credential`() {
+        val importedJson = """{"version":3,"activePrinterId":"same","printers":[
+            {"id":"same","nickname":"Imported","kind":"BAMBU_LAN","bambu":{"ip":"10.0.0.2","serial":"serial-1","model":"P1S"}},
+            {"id":"other","nickname":"Other","kind":"BAMBU_LAN","bambu":{"ip":"10.0.0.3","serial":"serial-2","model":"P1S"}}
+        ]}"""
+        val imported = SettingsBackup.import(importedJson)
+        val existing = PrintersConfig(listOf(Printer(
+            id = "same", nickname = "Local", kind = PrinterKind.BAMBU_LAN,
+            bambu = BambuConfig("10.0.0.2", "keep-me", "serial-1", BambuModel.P1S),
+        )), "same")
+        val merged = SettingsBackup.restoreMissingCredentials(imported, existing)
+        assertEquals("keep-me", merged.printers.first { it.id == "same" }.bambu!!.accessCode)
+        assertEquals("10.0.0.2", merged.printers.first { it.id == "same" }.bambu!!.ip)
+        assertEquals("", merged.printers.first { it.id == "other" }.bambu!!.accessCode)
+        val mismatchedSerial = existing.copy(printers = listOf(existing.active.copy(
+            bambu = existing.active.bambu!!.copy(serial = "different"),
+        )))
+        assertEquals("", SettingsBackup.restoreMissingCredentials(imported, mismatchedSerial)
+            .printers.first { it.id == "same" }.bambu!!.accessCode)
+        val mismatchedAddress = existing.copy(printers = listOf(existing.active.copy(
+            bambu = existing.active.bambu!!.copy(ip = "10.0.0.99"),
+        )))
+        val restoredAfterDhcpChange = SettingsBackup.restoreMissingCredentials(imported, mismatchedAddress)
+            .printers.first { it.id == "same" }.bambu!!
+        assertEquals("keep-me", restoredAfterDhcpChange.accessCode)
+        assertEquals("10.0.0.99", restoredAfterDhcpChange.ip)
+    }
+
+    @Test
+    fun `explicit empty access code clears old credential and missing cookie preserves it`() {
+        val printer = Printer(
+            id = "same", nickname = "Local", kind = PrinterKind.BAMBU_LAN,
+            bambu = BambuConfig("10.0.0.2", "old-code", "serial-1", BambuModel.P1S),
+        )
+        val existing = PrintersConfig(listOf(printer), "same")
+        val json = """{"version":2,"activePrinterId":"same","printers":[
+            {"id":"same","nickname":"Imported","kind":"BAMBU_LAN","bambu":
+             {"ip":"10.0.0.2","serial":"serial-1","model":"P1S","accessCode":""}}
+        ]}"""
+        val imported = SettingsBackup.import(json)
+        assertNull(imported.makerWorldCookies)
+        assertEquals("", SettingsBackup.restoreMissingCredentials(imported, existing).active.bambu!!.accessCode)
+        assertEquals("", SettingsBackup.import("""{"version":1,"makerWorldCookies":""}""").makerWorldCookies)
+    }
+
+    @Test
     fun `normalizeImportedSliceConfig clears stale skirt loops from backup`() {
         val imported = SliceConfig(skirtLoops = 1, brimWidth = 0f)
         val normalized = SlicerViewModel.normalizeImportedSliceConfig(imported)

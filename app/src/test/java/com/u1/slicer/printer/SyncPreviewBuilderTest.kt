@@ -88,6 +88,57 @@ class SyncPreviewBuilderTest {
     }
 
     @Test
+    fun `U1 empty slot does not overwrite preset during sync`() {
+        val currentPresets = presets.map {
+            if (it.index == 0) it.copy(filamentProfileId = 42L) else it
+        }
+        val emptySlot = FilamentSlot(
+            index = 0,
+            label = "E1",
+            color = "#808080",
+            loaded = false,
+            materialType = "NONE",
+            subType = "NONE",
+            manufacturer = "Snapmaker",
+        )
+
+        val entry = buildSyncPreviewEntries(
+            presets = currentPresets,
+            slots = listOf(emptySlot),
+            library = lib,
+            skipEmptySlots = true,
+        ).first()
+        val applied = applySyncPreviewEntries(
+            presets = currentPresets,
+            entries = listOf(entry),
+            applyColors = true,
+            applyTypes = true,
+        )
+
+        assertEquals("E1", entry.label)
+        assertEquals("#111111", entry.currentColor)
+        assertEquals("PLA", entry.currentType)
+        assertNull(entry.newColor)
+        assertNull(entry.newType)
+        assertEquals(currentPresets, applied)
+    }
+
+    @Test
+    fun `NONE subtype is ignored when matching loaded U1 slot`() {
+        val loadedSlot = slot(0, "Prusament").copy(subType = "NONE")
+
+        val entry = buildSyncPreviewEntries(
+            presets = presets,
+            slots = listOf(loadedSlot),
+            library = lib,
+            skipEmptySlots = true,
+        ).first()
+
+        assertEquals("prusament-pla-galaxy-black", entry.matchedSlug)
+        assertEquals("Prusament PLA Prusa Galaxy Black", entry.matchedName)
+    }
+
+    @Test
     fun `Bambu preview includes all sparse live routes and matches presets by id`() {
         val sparsePresets = listOf(
             ExtruderPreset(index = 128, color = "#AABBCC", materialType = "PA-CF"),

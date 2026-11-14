@@ -98,7 +98,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     // Resolved webcam snapshot URL candidates (primary + optional alt with port).
-    // Populated by resolveWebcam() which queries /server/webcams/list.
+    // Refreshed on connection and printer switches from /server/webcams/list.
     private val _webcamCandidates = MutableStateFlow<List<String>>(emptyList())
     val webcamCandidates: StateFlow<List<String>> = _webcamCandidates.asStateFlow()
 
@@ -140,6 +140,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     private val switchPrinterMutex = Mutex()
     private val auxiliaryPrinterJobs = Collections.synchronizedSet(mutableSetOf<Job>())
     private val activePrinterGeneration = AtomicInteger(0)
+    private val featureDiscoveryGeneration = AtomicInteger(0)
     @Volatile private var preparedSendGeneration: Int? = null
 
     fun startCameraKeepalive() {
@@ -218,11 +219,6 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         }
         libraryRepo.ensureLoaded(viewModelScope)
         printerRepo.startPolling(viewModelScope)
-        // Resolve webcam URLs for the already-saved printer URL (if any)
-        viewModelScope.launch(Dispatchers.IO) {
-            val context = capturePrinterActionContext(activePrinterGeneration.get())
-            resolveWebcam(context)
-        }
         // Auto-clear the "Print started!" banner once the printer confirms printing.
         // Also sync LED state on first connection (pollLedState only runs via testConnection otherwise).
         viewModelScope.launch {
@@ -237,6 +233,11 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                         val context = capturePrinterActionContext(requestedGeneration)
                         if (isCurrentPrinterAction(context)) pollLedState(context)
                     }
+                    refreshPrinterFeatures()
+                } else if (wasConnected && !s.isConnected) {
+                    featureDiscoveryGeneration.incrementAndGet()
+                    _remoteScreenAvailable.value = false
+                    _webcamCandidates.value = emptyList()
                 }
                 wasConnected = s.isConnected
             }
@@ -259,8 +260,6 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
             printerRepo.prepareForActivePrinterSwitch()
             printerRepo.updateActiveUrl(url)
             _connectionState.value = ConnectionState.Unknown
-            val context = capturePrinterActionContext(activePrinterGeneration.get())
-            resolveWebcam(context)
         }
     }
 
@@ -281,8 +280,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 printersRepo.setActive(id)
                 if (target.kind == PrinterKind.MOONRAKER) {
                     withTimeoutOrNull(3_000) { printerRepo.printerUrl.first { it.isNotBlank() } }
-                    val context = capturePrinterActionContext(activePrinterGeneration.get())
-                    resolveWebcam(context)
+                    refreshPrinterFeatures()
                 }
             }
         }
@@ -425,10 +423,17 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private suspend fun resolveWebcam(actionContext: PrinterActionContext) {
-        val candidates = printerRepo.queryWebcamSnapshotCandidates()
-        if (isCurrentPrinterAction(actionContext)) {
-            _webcamCandidates.value = candidates
+    private fun refreshPrinterFeatures(expectedGeneration: Int = activePrinterGeneration.get()) {
+        if (expectedGeneration != activePrinterGeneration.get()) return
+        val discovery = featureDiscoveryGeneration.incrementAndGet()
+        launchBoundPrinterAction { context ->
+            if (context.generation != expectedGeneration) return@launchBoundPrinterAction
+            val remoteScreen = printerRepo.probeRemoteScreen()
+            val webcams = printerRepo.queryWebcamSnapshotCandidates()
+            if (featureDiscoveryGeneration.get() == discovery && isCurrentPrinterAction(context)) {
+                _remoteScreenAvailable.value = remoteScreen
+                _webcamCandidates.value = webcams
+            }
         }
     }
 
@@ -449,11 +454,11 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
             if (error == null) {
                 pollLedState(actionContext)
                 if (!isCurrentPrinterAction(actionContext)) return@launch
-                _remoteScreenAvailable.value = printerRepo.probeRemoteScreen()
-                if (!isCurrentPrinterAction(actionContext)) return@launch
-                resolveWebcam(actionContext)
+                refreshPrinterFeatures(actionContext.generation)
             } else {
+                featureDiscoveryGeneration.incrementAndGet()
                 _remoteScreenAvailable.value = false
+                _webcamCandidates.value = emptyList()
             }
         }
     }
@@ -502,6 +507,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 slots = slots,
                 library = library,
                 includeAllPrinterSlots = active?.kind == PrinterKind.BAMBU_LAN,
+                skipEmptySlots = active?.kind == PrinterKind.MOONRAKER,
             )
             if (active?.kind == PrinterKind.BAMBU_LAN) {
                 BambuDiagnostics.record(
@@ -943,6 +949,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
 
     private fun invalidateActivePrinterOperations() {
         activePrinterGeneration.incrementAndGet()
+        featureDiscoveryGeneration.incrementAndGet()
         preparedSendGeneration = null
         cancelActivePrinterJobs()
         _connectionState.value = ConnectionState.Unknown

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="backup_include_credentials">Include sign-in cookies and printer access codes</string>
+    <string name="backup_credentials_warning">If selected, the backup file contains credentials. Keep it private.</string>
+</resources>

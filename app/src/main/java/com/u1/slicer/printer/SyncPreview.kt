@@ -17,6 +17,7 @@ fun buildSyncPreviewEntries(
     slots: List<FilamentSlot>,
     library: FilamentLibrary?,
     includeAllPrinterSlots: Boolean = false,
+    skipEmptySlots: Boolean = false,
 ): List<PrinterViewModel.SyncPreviewEntry> {
     val slotIndices = if (includeAllPrinterSlots) {
         slots.map { it.index }.distinct().sorted()
@@ -26,12 +27,13 @@ fun buildSyncPreviewEntries(
     return slotIndices.map { i ->
         val preset = presets.firstOrNull { it.index == i } ?: ExtruderPreset(i)
         val printerSlot = slots.firstOrNull { it.index == i }
+        val emptySlot = skipEmptySlots && printerSlot?.loaded == false
         val match = if (library != null && printerSlot?.loaded == true) {
             FilamentLibraryMatcher.match(
                 library,
                 vendor = printerSlot.manufacturer,
                 material = printerSlot.materialType,
-                subType = printerSlot.subType,
+                subType = printerSlot.subType.takeUnless { skipEmptySlots && it.equals("NONE", ignoreCase = true) },
                 hex = printerSlot.color,
             )
         } else null
@@ -39,9 +41,9 @@ fun buildSyncPreviewEntries(
             slotIndex = i,
             label = printerSlot?.label ?: "E${i + 1}",
             currentColor = preset.color,
-            newColor = match?.entry?.hex ?: printerSlot?.color,
+            newColor = if (emptySlot) null else match?.entry?.hex ?: printerSlot?.color,
             currentType = preset.materialType,
-            newType = match?.entry?.material ?: printerSlot?.materialType,
+            newType = if (emptySlot) null else match?.entry?.material ?: printerSlot?.materialType,
             matchedSlug = match?.entry?.slug,
             matchedName = match?.entry?.displayName,
         )

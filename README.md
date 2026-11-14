@@ -1,4 +1,14 @@
-# Your One Slicer for Android
+# 3DPrintTheThings
+
+Android model browsing, on-device slicing and printing for the Snapmaker U1. This is an early development fork of [Your One Slicer for Android](https://github.com/taylormadearmy/u1-slicer-for-android), with credit to its authors and the OrcaSlicer/PrusaSlicer contributors. Source remains available under AGPL-3.0; see [LICENSE](LICENSE).
+
+The application ID is `io.github.jwischka.threedprintthethings`, so it can install alongside upstream. The native engine retains the `com.u1.slicer` namespace. Fork changes have not yet been verified on a physical printer. The upstream feature documentation below describes the inherited implementation.
+
+Build with JDK 17 and Android SDK 34: `./gradlew assembleDebug assembleRelease testDebugUnitTest`. Debug APKs are installable development builds. Release APKs are unsigned unless all four environment variables `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD` are supplied. Alternatively, use `release.storeFile`, `release.storePassword`, `release.keyAlias`, and `release.keyPassword` in ignored `local.properties`. Never commit signing keys or passwords.
+
+## Upstream documentation
+
+The JVM suite includes a structural check of the pinned engine's `src/libslic3r/PrintObject.cpp`. If the native submodule is not initialized, fetch that one file as shown in [the CI workflow](.github/workflows/ci.yml) before running the full suite. APK builds use the bundled native library and require no native build.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 

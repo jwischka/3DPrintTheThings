@@ -165,7 +165,7 @@ class MainActivity : ComponentActivity() {
         val summary = viewModel.buildModelDebugSummary() ?: return
         val clipboard = getSystemService(android.content.ClipboardManager::class.java)
         clipboard.setPrimaryClip(
-            android.content.ClipData.newPlainText("Your One Slicer Model Debug Summary", summary)
+            android.content.ClipData.newPlainText(getString(R.string.model_debug_summary), summary)
         )
         android.widget.Toast.makeText(this, "Debug summary copied", android.widget.Toast.LENGTH_SHORT).show()
     }
@@ -626,7 +626,7 @@ class MainActivity : ComponentActivity() {
                             printerViewModel = printerViewModel,
                             onPickFile = { filePickerLauncher.launch(pickFileMimeTypes) },
                             onAddFileToBed = { addToBedLauncher.launch(pickFileMimeTypes) },
-                            onBrowseMakerWorld = { navController.navigate(Routes.MAKERWORLD_BROWSER) },
+                            onBrowseMakerWorld = { navController.navigate(Routes.BROWSE) },
                             onNavigatePrepare = { },
                             onNavigatePreview = { navigateTab(Routes.PREVIEW) },
                             onNavigateSettings = { navigateTab(Routes.SETTINGS) },
@@ -1950,16 +1950,16 @@ fun PrepareScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Your One Slicer", fontWeight = FontWeight.Bold)
+                        Text(androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.app_name), fontWeight = FontWeight.Bold)
                         Text(
-                            "☕ Support development",
+                            androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.project_source),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable {
                                 context.startActivity(
                                     android.content.Intent(
                                         android.content.Intent.ACTION_VIEW,
-                                        android.net.Uri.parse(BMAC_URL)
+                                        android.net.Uri.parse(GITHUB_URL)
                                     )
                                 )
                             }
@@ -2594,7 +2594,7 @@ fun PrepareEmptyState(onPickFile: () -> Unit, onBrowseMakerWorld: () -> Unit = {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = onBrowseMakerWorld) {
-                    Text("Browse MakerWorld in App")
+                    Text(androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.browse_models))
                 }
                 IconButton(onClick = { showMakerWorldInfo = true }) {
                     Icon(Icons.Default.Info, "MakerWorld help")
@@ -2620,7 +2620,7 @@ private fun MakerWorldModeDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    "Best for signed-in browsing. Google login works here, and it is the most reliable way to download a 3MF/STL or share a MakerWorld model link back to Your One Slicer.",
+                    androidx.compose.ui.res.stringResource(R.string.makerworld_external_login_hint),
                     style = MaterialTheme.typography.bodySmall
                 )
                 HorizontalDivider()
@@ -2692,16 +2692,16 @@ fun PreviewScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Your One Slicer", fontWeight = FontWeight.Bold)
+                        Text(androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.app_name), fontWeight = FontWeight.Bold)
                         Text(
-                            "☕ Support development",
+                            androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.project_source),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable {
                                 context.startActivity(
                                     android.content.Intent(
                                         android.content.Intent.ACTION_VIEW,
-                                        android.net.Uri.parse(BMAC_URL)
+                                        android.net.Uri.parse(GITHUB_URL)
                                     )
                                 )
                             }

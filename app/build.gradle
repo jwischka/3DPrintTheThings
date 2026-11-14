@@ -4,12 +4,24 @@ plugins {
     id 'kotlin-kapt'
 }
 
+// Local release credentials are optional; without them assembleRelease produces an unsigned APK.
+def signingProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+def releaseStore = System.getenv('RELEASE_STORE_FILE') ?: signingProperties.getProperty('release.storeFile')
+def releaseStorePassword = System.getenv('RELEASE_STORE_PASSWORD') ?: signingProperties.getProperty('release.storePassword')
+def releaseAlias = System.getenv('RELEASE_KEY_ALIAS') ?: signingProperties.getProperty('release.keyAlias')
+def releaseKeyPassword = System.getenv('RELEASE_KEY_PASSWORD') ?: signingProperties.getProperty('release.keyPassword')
+def hasReleaseSigning = [releaseStore, releaseStorePassword, releaseAlias, releaseKeyPassword].every { it }
+
 android {
     namespace 'com.u1.slicer'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.u1.slicer.orca"
+        applicationId "io.github.jwischka.threedprintthethings"
         minSdk 26
         targetSdk 34
         versionCode 401
@@ -23,11 +35,13 @@ android {
     }
 
     signingConfigs {
-        debug {
-            storeFile file("${System.getProperty('user.home')}/.android/debug.keystore")
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
+        if (hasReleaseSigning) {
+            release {
+                storeFile rootProject.file(releaseStore)
+                storePassword releaseStorePassword
+                keyAlias releaseAlias
+                keyPassword releaseKeyPassword
+            }
         }
     }
 
@@ -35,8 +49,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // Sign with debug keystore — personal/sideload use only, not Play Store
-            signingConfig signingConfigs.debug
+            if (hasReleaseSigning) signingConfig signingConfigs.release
         }
         debug {
             minifyEnabled false

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -51,10 +52,9 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import com.u1.slicer.BMAC_URL
+import com.u1.slicer.GITHUB_URL
 import com.u1.slicer.util.toFloatLenient
 import com.u1.slicer.BuildConfig
-import com.u1.slicer.GITHUB_URL
 import com.u1.slicer.SlicerViewModel
 import com.u1.slicer.U1SlicerApplication
 import com.u1.slicer.data.BambuConfig
@@ -375,13 +375,13 @@ fun SettingsScreen(
                     }
                 }
 
-                // Buy Me a Coffee card
+                // Project source card
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
                             context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(BMAC_URL))
+                                Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))
                             )
                         },
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFFDD00)),
@@ -392,16 +392,16 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("\u2615", fontSize = 22.sp)
+                        Icon(Icons.Outlined.Info, contentDescription = null, tint = Color.Black)
                         Column {
                             Text(
-                                "Buy Me a Coffee",
+                                androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.project_source),
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = Color.Black
                             )
                             Text(
-                                "buymeacoffee.com/taylormadearmy",
+                                androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.project_source_description),
                                 fontSize = 10.sp,
                                 color = Color(0xFF555555)
                             )
@@ -545,9 +545,7 @@ fun SettingsScreen(
                 }
             ) {
                 Text(
-                    "Google sign-in is not supported inside the app browser. " +
-                        "Best results come from opening MakerWorld in your browser, then " +
-                        "downloading the 3MF/STL there or sharing the model link back to Your One Slicer.",
+                    androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.makerworld_embedded_login_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 )
@@ -694,15 +692,19 @@ fun SettingsScreen(
 
             // ---- Backup & Restore ----
             var backupStatus by remember { mutableStateOf<String?>(null) }
+            var includeBackupCredentials by remember { mutableStateOf(false) }
+            var exportIncludesCredentials by rememberSaveable { mutableStateOf(false) }
 
             val exportLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.CreateDocument("application/json")
             ) { uri: Uri? ->
                 if (uri != null) {
-                    viewModel.exportBackupAsync { json ->
+                    viewModel.exportBackupAsync(includeCredentials = exportIncludesCredentials) { json ->
                         context.contentResolver.openOutputStream(uri)?.use { out ->
                             out.write(json.toByteArray())
                             backupStatus = "Settings exported"
+                            includeBackupCredentials = false
+                            exportIncludesCredentials = false
                         }
                     }
                 }
@@ -725,8 +727,23 @@ fun SettingsScreen(
             }
 
             SettingsSection("Backup & Restore") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = includeBackupCredentials,
+                        onCheckedChange = { includeBackupCredentials = it },
+                    )
+                    Text(androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.backup_include_credentials))
+                }
+                Text(
+                    androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.backup_credentials_warning),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
                 Button(
-                    onClick = { exportLauncher.launch("u1-slicer-backup.json") },
+                    onClick = {
+                        exportIncludesCredentials = includeBackupCredentials
+                        exportLauncher.launch("u1-slicer-backup.json")
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) { Text("Export Settings") }
@@ -947,7 +964,7 @@ private fun MakerWorldModeDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    "Best for signed-in browsing. Google login works here, and it is the most reliable way to download a 3MF/STL or share a MakerWorld model link back to Your One Slicer.",
+                    androidx.compose.ui.res.stringResource(com.u1.slicer.R.string.makerworld_external_login_hint),
                     style = MaterialTheme.typography.bodySmall
                 )
                 HorizontalDivider()

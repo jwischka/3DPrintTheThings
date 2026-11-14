@@ -24,6 +24,7 @@ object SettingsBackup {
         val filamentProfiles: List<FilamentProfile>?,
         val processProfilesConfig: ProcessProfilesConfig? = null,
         val makerWorldCookies: String? = null,
+        val printerIdsWithoutAccessCode: Set<String> = emptySet(),
     )
 
     fun import(json: String): BackupData {
@@ -33,11 +34,22 @@ object SettingsBackup {
             throw IllegalArgumentException("Unsupported backup version: $version (this app supports 1..$VERSION)")
         }
 
+        val printerIdsWithoutAccessCode = mutableSetOf<String>()
         val printersConfig: PrintersConfig? = when {
             // v2+ with explicit printers array
             root.has("printers") && root.has("activePrinterId") -> {
                 val arr = root.getJSONArray("printers")
-                val list = (0 until arr.length()).map { Printer.fromJsonObject(arr.getJSONObject(it)) }
+                val list = (0 until arr.length()).map { index ->
+                    val printerJson = arr.getJSONObject(index)
+                    val bambu = printerJson.optJSONObject("bambu")
+                    if (bambu != null && (!bambu.has("accessCode") || bambu.optBoolean("accessCodeOmitted", false))) {
+                        printerIdsWithoutAccessCode += printerJson.getString("id")
+                        // v3 Bambu readers require accessCode. The omission marker distinguishes
+                        // a sanitized blank from an explicit blank that clears a local code.
+                        bambu.put("accessCode", "")
+                    }
+                    Printer.fromJsonObject(printerJson)
+                }
                 PrintersConfig(printers = list, activeId = root.getString("activePrinterId"))
             }
             // v1 — synthesize from legacy fields
@@ -85,18 +97,40 @@ object SettingsBackup {
             filamentProfiles = root.optJSONArray("filamentProfiles")?.let { parseFilamentProfilesArray(it) },
             processProfilesConfig = processProfilesConfig,
             makerWorldCookies = if (root.has("makerWorldCookies")) root.getString("makerWorldCookies") else null,
+            printerIdsWithoutAccessCode = printerIdsWithoutAccessCode,
         )
     }
 
+    /** Missing secrets in a sanitized backup keep local values only for the same printer identity. */
+    fun restoreMissingCredentials(data: BackupData, existing: PrintersConfig?): PrintersConfig {
+        val imported = requireNotNull(data.printersConfig)
+        if (existing == null || data.printerIdsWithoutAccessCode.isEmpty()) return imported
+        val currentById = existing.printers.associateBy { it.id }
+        return imported.copy(printers = imported.printers.map { printer ->
+            val local = currentById[printer.id]
+            val importedBambu = printer.bambu
+            val localBambu = local?.bambu
+            if (printer.id in data.printerIdsWithoutAccessCode &&
+                printer.kind == PrinterKind.BAMBU_LAN && local?.kind == PrinterKind.BAMBU_LAN &&
+                importedBambu != null && localBambu != null && importedBambu.serial == localBambu.serial) {
+                // Keep the credential and its endpoint together, including after local DHCP changes.
+                printer.copy(bambu = importedBambu.copy(
+                    ip = localBambu.ip,
+                    accessCode = localBambu.accessCode,
+                ))
+            } else printer
+        })
+    }
+
     /**
-     * Export [BackupData] as a VERSION=2 JSON string.
+     * Export [BackupData] as a version 3 JSON string. Credentials require explicit opt-in.
      *
-     * v2 schema:
+     * Multi-printer schema:
      *  - `printers` array + `activePrinterId`
      *  - Legacy compat: active printer's `printerUrl` + `extruderPresets` also written
      *    at the top level so a v1 reader can still load essential printer settings.
      */
-    fun export(data: BackupData): String {
+    fun export(data: BackupData, includeCredentials: Boolean = false): String {
         val root = JSONObject()
         root.put("version", VERSION)
         data.sliceConfig?.let { root.put("sliceConfig", exportSliceConfig(it)) }
@@ -104,7 +138,7 @@ object SettingsBackup {
         data.filamentProfiles?.let { profiles ->
             root.put("filamentProfiles", exportFilamentProfiles(profiles))
         }
-        data.makerWorldCookies?.let { if (it.isNotEmpty()) root.put("makerWorldCookies", it) }
+        if (includeCredentials) data.makerWorldCookies?.let { root.put("makerWorldCookies", it) }
 
         // F87: process profiles. Absent when not in use, so v3 backups are still backwards-compatible.
         data.processProfilesConfig?.let { ppCfg ->
@@ -119,7 +153,14 @@ object SettingsBackup {
         data.printersConfig?.let { cfg ->
             // v2 schema: full list
             val arr = JSONArray()
-            cfg.printers.forEach { arr.put(Printer.toJsonObject(it)) }
+            cfg.printers.forEach { printer ->
+                val json = Printer.toJsonObject(printer)
+                if (!includeCredentials) json.optJSONObject("bambu")?.apply {
+                    put("accessCode", "")
+                    put("accessCodeOmitted", true)
+                }
+                arr.put(json)
+            }
             root.put("printers", arr)
             root.put("activePrinterId", cfg.activeId)
             // v1 rollback compat: mirror the active printer's URL + presets into legacy fields
@@ -145,6 +186,7 @@ object SettingsBackup {
         makerWorldCookies: String = "",
         printersConfig: PrintersConfig? = null,
         processProfilesConfig: ProcessProfilesConfig? = null,
+        includeCredentials: Boolean = false,
     ): String {
         // If a full PrintersConfig is provided (v2 path), use it.
         // Otherwise synthesise a single-printer config from the legacy flat fields.
@@ -178,7 +220,7 @@ object SettingsBackup {
 
         // We need to honour filamentNameResolver on extruder presets in the legacy JSON path.
         // Build the JSON via export(data) then patch the extruderPresets array with resolved names.
-        val root = JSONObject(export(data))
+        val root = JSONObject(export(data, includeCredentials))
         val presetsArr = exportExtruderPresetsWithNames(extruderPresets, filamentNameResolver)
         root.put("extruderPresets", presetsArr)
         return root.toString(2)

@@ -14,6 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
+    val browseHttpClient = okhttp3.OkHttpClient.Builder()
+        .callTimeout(5, java.util.concurrent.TimeUnit.MINUTES)
+        .build()
+    val printablesClient = com.u1.slicer.browse.printables.PrintablesClient(browseHttpClient)
+    val downloadStore = com.u1.slicer.library.DownloadStore(context.applicationContext.filesDir, browseHttpClient)
     private val diagnosticsStore = DiagnosticsStore(context.applicationContext)
     init {
         BambuDiagnostics.install { event, details -> diagnosticsStore.recordEvent(event, details) }

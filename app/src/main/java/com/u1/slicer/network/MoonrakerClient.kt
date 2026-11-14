@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit
  */
 class MoonrakerClient {
     private val TAG = "MoonrakerClient"
+    private val remoteScreenProber = RemoteScreenProber()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -198,19 +199,7 @@ class MoonrakerClient {
      * Probes `http://<host>/screen/` (paxx12 extended firmware).
      * @return true if the endpoint responds with HTTP 2xx, false otherwise.
      */
-    suspend fun probeRemoteScreen(): Boolean = withContext(Dispatchers.IO) {
-        val screenUrl = remoteScreenUrl() ?: return@withContext false
-        try {
-            val shortClient = OkHttpClient.Builder()
-                .connectTimeout(3, TimeUnit.SECONDS)
-                .readTimeout(3, TimeUnit.SECONDS)
-                .build()
-            val response = shortClient.newCall(Request.Builder().url(screenUrl).get().build()).execute()
-            val ok = response.isSuccessful
-            response.close()
-            ok
-        } catch (_: Exception) { false }
-    }
+    suspend fun probeRemoteScreen(): Boolean = remoteScreenProber.probe(remoteScreenUrl())
 
     /**
      * Get printer status: temps, state, progress.
@@ -315,12 +304,19 @@ class MoonrakerClient {
             val vendors = ptc.optJSONArray("filament_vendor")
             val exist = ptc.optJSONArray("filament_exist")
 
-            if (colors == null || colors.length() == 0) return null
+            val slotCount = exist?.length()?.takeIf { it > 0 } ?: colors?.length() ?: 0
+            if (slotCount == 0) return null
 
             val slots = mutableListOf<FilamentSlot>()
-            for (i in 0 until colors.length()) {
-                val rgba = colors.optString(i, "")
-                val loaded = exist?.optInt(i, 0) != 0
+            for (i in 0 until slotCount) {
+                val rgba = colors?.optString(i, "") ?: ""
+                // U1 firmware reports booleans; retain older numeric/string encodings.
+                val loaded = when (val value = exist?.opt(i)) {
+                    is Boolean -> value
+                    is Number -> value.toDouble() != 0.0
+                    is String -> value.trim().let { it == "1" || it.equals("true", ignoreCase = true) }
+                    else -> false
+                }
                 slots.add(FilamentSlot(
                     index = i,
                     label = "E${i + 1}",

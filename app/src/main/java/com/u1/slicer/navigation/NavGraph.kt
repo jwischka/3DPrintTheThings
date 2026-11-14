@@ -35,6 +35,8 @@ object Routes {
     const val GCODE_VIEWER_3D = "gcode_viewer_3d"
     const val MODEL_VIEWER = "model_viewer"
     const val MAKERWORLD_BROWSER = "makerworld_browser"
+    const val BROWSE = "browse"
+    const val DOWNLOADS = "downloads"
     const val AI_PAINT = "ai_paint"
 }
 
@@ -169,6 +171,35 @@ fun U1NavGraph(
                     onBack = { navController.popBackStack() }
                 )
             }
+        }
+        composable(Routes.BROWSE) {
+            val container = (navController.context.applicationContext as U1SlicerApplication).container
+            com.u1.slicer.browse.BrowseScreen(
+                client = container.printablesClient,
+                onDownload = { model, file, url ->
+                    val entry = container.downloadStore.download(url, file.name,
+                        com.u1.slicer.library.DownloadProvenance(
+                            site = "printables", pageUrl = model.pageUrl, title = model.name,
+                            author = model.author, thumbnailUrl = model.imageUrl,
+                        ))
+                    viewModel.loadModelFromFile(container.downloadStore.fileFor(entry), preserveDisplayName = entry.fileName)
+                    navController.popBackStack(Routes.PREPARE, inclusive = false)
+                },
+                onBrowseMakerWorld = { navController.navigate(Routes.MAKERWORLD_BROWSER) },
+                onLibrary = { navController.navigate(Routes.DOWNLOADS) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.DOWNLOADS) {
+            val container = (navController.context.applicationContext as U1SlicerApplication).container
+            com.u1.slicer.library.LibraryScreen(
+                store = container.downloadStore,
+                onOpen = { file, name ->
+                    viewModel.loadModelFromFile(file, preserveDisplayName = name)
+                    navController.popBackStack(Routes.PREPARE, inclusive = false)
+                },
+                onBack = { navController.popBackStack() },
+            )
         }
         composable(Routes.MAKERWORLD_BROWSER) {
             MakerWorldBrowserScreen(

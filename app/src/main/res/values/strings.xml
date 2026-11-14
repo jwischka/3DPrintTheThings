@@ -1,3 +1,25 @@
 <resources>
-    <string name="app_name">Your One Slicer</string>
+    <string name="app_name">3DPrintTheThings</string>
+    <string name="project_source">Project source</string>
+    <string name="project_source_description">View the source code and report issues on GitHub.</string>
+    <string name="model_debug_summary">Model debug summary</string>
+    <string name="makerworld_external_login_hint">Best for signed-in browsing. Google login works here, and it is the most reliable way to download a 3MF/STL or share a MakerWorld model link back to 3DPrintTheThings.</string>
+    <string name="makerworld_embedded_login_hint">Google sign-in is not supported inside the app browser. Best results come from opening MakerWorld in your browser, then downloading the 3MF/STL there or sharing the model link back to 3DPrintTheThings.</string>
+    <string name="browse_models">Browse models</string>
+    <string name="browse_back">Back</string>
+    <string name="download_library">Downloads</string>
+    <string name="browse_search_label">Search Printables</string>
+    <string name="browse_search">Search</string>
+    <string name="browse_no_results">No models found. Try another search.</string>
+    <string name="browse_no_files">No STL or 3MF files are available for this model.</string>
+    <string name="browse_request_failed">Could not load this content. Check your connection and try again, or open the website.</string>
+    <string name="browse_open_website">Open website</string>
+    <string name="browse_download_open">Download and open</string>
+    <string name="library_open">Open</string>
+    <string name="library_delete">Delete</string>
+    <string name="library_cancel">Cancel</string>
+    <string name="library_delete_title">Delete download?</string>
+    <string name="library_delete_description">Remove %1$s from your downloads? You can download it again from its source page.</string>
+    <string name="library_empty">Your downloaded models will appear here.</string>
+    <string name="library_failed">Could not access this download. Try downloading the model again.</string>
 </resources>
