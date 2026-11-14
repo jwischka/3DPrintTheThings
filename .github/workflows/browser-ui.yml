@@ -51,9 +51,18 @@ jobs:
             --keystore "$HOME/.android/debug.keystore" \
             --zipalign "$ANDROID_HOME/build-tools/34.0.0/zipalign" \
             --apksigner "$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          python3 tools/prepare-ui-test-apk.py \
+            --input app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --output "$RUNNER_TEMP/browser-ui/androidTest-ui-only.apk" \
+            --keystore "$HOME/.android/debug.keystore" \
+            --zipalign "$ANDROID_HOME/build-tools/34.0.0/zipalign" \
+            --apksigner "$ANDROID_HOME/build-tools/34.0.0/apksigner"
           signer="$ANDROID_HOME/build-tools/34.0.0/apksigner"
-          app_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/browser-ui/app-ui-only.apk" | grep 'Signer #1 certificate SHA-256 digest:')
-          test_cert=$("$signer" verify --print-certs app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk | grep 'Signer #1 certificate SHA-256 digest:')
+          app_info=$("$signer" verify --print-certs "$RUNNER_TEMP/browser-ui/app-ui-only.apk")
+          test_info=$("$signer" verify --print-certs "$RUNNER_TEMP/browser-ui/androidTest-ui-only.apk")
+          printf 'Disposable app certificate:\n%s\nDisposable test certificate:\n%s\n' "$app_info" "$test_info"
+          app_cert=$(printf '%s\n' "$app_info" | grep 'Signer #1 certificate SHA-256 digest:' || true)
+          test_cert=$(printf '%s\n' "$test_info" | grep 'Signer #1 certificate SHA-256 digest:' || true)
           test -n "$app_cert" && test "$app_cert" = "$test_cert"
       - name: Enable KVM on the ephemeral runner
         run: |
@@ -71,7 +80,7 @@ jobs:
           script: >-
             python3 tools/run-browser-instrumentation.py
             --app "$RUNNER_TEMP/browser-ui/app-ui-only.apk"
-            --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            --test "$RUNNER_TEMP/browser-ui/androidTest-ui-only.apk"
             --log browser-ui-results/instrumentation.log --timeout 300
       - name: Upload browser UI logs
         if: always()
