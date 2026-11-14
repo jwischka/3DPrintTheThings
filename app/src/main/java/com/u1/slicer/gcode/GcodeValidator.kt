@@ -344,7 +344,7 @@ object GcodeValidator {
      */
     fun maxRetractionMm(gcode: String): Double {
         var maxRetract = 0.0
-        val eRegex = Regex("""^G1\s.*E(-\d+(?:\.\d+)?)""")
+        val eRegex = Regex("""^G1\s.*E(-(?:\d+(?:\.\d+)?|\.\d+))""")
         for (line in gcode.lines()) {
             val t = line.trim()
             val m = eRegex.find(t) ?: continue

@@ -169,6 +169,12 @@ class GcodeValidatorTest {
     // ─── maxRetractionMm ────────────────────────────────────────────────────────
 
     @Test
+    fun maxRetractionMm_acceptsOrcaLeadingDecimal() {
+        val gcode = "G1 E-.8 F2700\nG1 E-0.4 F2700\nG1 E.8 F2700"
+        assertEquals(0.8, GcodeValidator.maxRetractionMm(gcode), 0.0001)
+    }
+
+    @Test
     fun maxRetractionMm_findsLargestRetraction() {
         val gcode = "G1 E-.8 F2700\nG1 X10 Y10 E1.5\nG1 E-2.0 F2700\n"
         assertEquals(2.0, GcodeValidator.maxRetractionMm(gcode), 0.001)
