@@ -6,6 +6,16 @@ The application ID is `io.github.jwischka.threedprintthethings`, so it can insta
 
 Build with JDK 17 and Android SDK 34: `./gradlew assembleDebug assembleRelease testDebugUnitTest`. Debug APKs are installable development builds. Release APKs are unsigned unless all four environment variables `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD` are supplied. Alternatively, use `release.storeFile`, `release.storePassword`, `release.keyAlias`, and `release.keyPassword` in ignored `local.properties`. Never commit signing keys or passwords.
 
+## Fork features
+
+- Native Printables search and model-file downloads, plus browsing for MakerWorld, Printables, Thingiverse, Thangs and Cults3D.
+- A durable download library, Android model-link sharing, and a ZIP picker for STL/3MF files.
+- One download path for attachment links and bounded browser blobs, with source-page provenance and cancellation cleanup.
+- Moonraker upload progress, HTTPS/reverse-proxy addresses, readiness checks before print start, confirmed cancellation, and visible control failures.
+- Optional endpoint-bound Moonraker API keys stored outside backups, including authenticated snapshots within the configured endpoint.
+
+See [model browsing](docs/HLSD/model-browsing.md) and [printer connections](docs/HLSD/printer-connection.md) for design and limits. CI runs JVM tests and isolated UI tests on an emulator. Live-site account flows and native slicing/printing still need validation on an ARM64 phone and printer. The shipped native engine and JNI contracts remain unchanged; desktop preset parity is separate work.
+
 ## Upstream documentation
 
 The JVM suite includes a structural check of the pinned engine's `src/libslic3r/PrintObject.cpp`. If the native submodule is not initialized, fetch that one file as shown in [the CI workflow](.github/workflows/ci.yml) before running the full suite. APK builds use the bundled native library and require no native build.

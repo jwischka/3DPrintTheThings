@@ -466,13 +466,20 @@ fun SettingsScreen(
                 if (printerViewModel != null) {
                     val printerList by printerViewModel.printerList.collectAsState()
                     val activePrinterId by printerViewModel.activePrinterId.collectAsState()
+                    val configurationError by printerViewModel.configurationError.collectAsState()
+                    LaunchedEffect(configurationError) {
+                        configurationError?.let {
+                            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                            printerViewModel.clearConfigurationError()
+                        }
+                    }
                     val visiblePrinters = if (bambuBetaEnabled) printerList else
                         printerList.filter { it.kind != com.u1.slicer.data.PrinterKind.BAMBU_LAN }
 
                     com.u1.slicer.ui.printer.PrintersSettingsCard(
                         printers = visiblePrinters,
                         activeId = activePrinterId,
-                        onAdd = { nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel ->
+                        onAdd = { nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey ->
                             printerViewModel.addPrinter(
                                 nick,
                                 kind,
@@ -481,9 +488,10 @@ fun SettingsScreen(
                                 bambuAccessCode,
                                 bambuSerial,
                                 bambuModel,
+                                apiKey,
                             )
                         },
-                        onEdit = { id, nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel ->
+                        onEdit = { id, nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey ->
                             printerViewModel.updatePrinter(
                                 id,
                                 nick,
@@ -493,16 +501,15 @@ fun SettingsScreen(
                                 bambuAccessCode,
                                 bambuSerial,
                                 bambuModel,
+                                apiKey,
                             )
                         },
                         onDelete = { id -> printerViewModel.deletePrinter(id) },
-                        onTestConnection = { kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel ->
+                        hasSavedApiKey = printerViewModel::hasMoonrakerApiKey,
+                        onTestConnection = { printerId, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey ->
                             when (kind) {
                                 com.u1.slicer.data.PrinterKind.MOONRAKER -> {
-                                    val client = com.u1.slicer.network.MoonrakerClient().apply {
-                                        baseUrl = com.u1.slicer.network.MoonrakerClient.normalizeUrl(url)
-                                    }
-                                    client.testConnection()
+                                    printerViewModel.testMoonrakerConnection(printerId, url, apiKey)
                                 }
                                 com.u1.slicer.data.PrinterKind.BAMBU_LAN -> {
                                     if (bambuIp.isBlank() || bambuAccessCode.isBlank() || bambuSerial.isBlank()) {

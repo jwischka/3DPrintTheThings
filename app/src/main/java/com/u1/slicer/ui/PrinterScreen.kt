@@ -50,8 +50,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -69,7 +67,6 @@ import com.u1.slicer.gcode.ExcludeObjectInfo
 import com.u1.slicer.ui.printer.buildPrinterSubtitle
 import com.u1.slicer.ui.printer.CancelPrintDialog
 import com.u1.slicer.ui.printer.shouldShowActivePrinterSelector
-import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -153,21 +150,13 @@ fun PrinterScreen(
         candidateIndex = 0
         cameraFrame = null
         if (webcamCandidates.isEmpty()) return@LaunchedEffect
-        val http = OkHttpClient.Builder()
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .readTimeout(3, TimeUnit.SECONDS)
-            .build()
         while (true) {
             val baseUrl = webcamCandidates.getOrNull(candidateIndex)
                 ?: webcamCandidates.last()
             val sep = if (baseUrl.contains('?')) '&' else '?'
             val pollUrl = "$baseUrl${sep}_cb=${System.currentTimeMillis()}"
             try {
-                val bytes = withContext(Dispatchers.IO) {
-                    http.newCall(Request.Builder().url(pollUrl).build()).execute().use { response ->
-                        if (response.isSuccessful) response.body?.bytes() else null
-                    }
-                }
+                val bytes = viewModel.getWebcamSnapshot(pollUrl)
                 if (bytes != null) {
                     val bmp = withContext(Dispatchers.Default) {
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)

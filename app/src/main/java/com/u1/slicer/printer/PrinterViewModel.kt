@@ -47,6 +47,30 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     private val libraryRepo = (application as U1SlicerApplication).container.filamentLibraryRepository
     private val filamentDao = (application as U1SlicerApplication).container.filamentDao
     private val settingsRepo = (application as U1SlicerApplication).container.settingsRepository
+    private val apiKeys = (application as U1SlicerApplication).container.moonrakerApiKeys
+    private val _configurationError = MutableStateFlow<String?>(null)
+    val configurationError: StateFlow<String?> = _configurationError.asStateFlow()
+    fun clearConfigurationError() { _configurationError.value = null }
+
+    suspend fun hasMoonrakerApiKey(id: String, url: String): Boolean = withContext(Dispatchers.IO) {
+        apiKeys.get(id, url) != null
+    }
+
+    suspend fun testMoonrakerConnection(id: String?, url: String, draftKey: String?): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val key = if (draftKey == null) id?.let { apiKeys.get(it, url) }
+                    else draftKey.takeIf { it.isNotBlank() }
+                com.u1.slicer.network.MoonrakerClient().apply {
+                    baseUrl = url
+                    configureApiKey(key)
+                }.testConnection()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                getApplication<Application>().getString(com.u1.slicer.R.string.printer_connection_test_failed)
+            }
+        }
 
     // ── OpenPrintTag filament library (Task 7) — hosted in ExtruderSlotEditDialog ──
     val libraryState = libraryRepo.state
@@ -125,6 +149,8 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     val controlError: StateFlow<String?> = _controlError.asStateFlow()
 
     fun clearControlError() { _controlError.value = null }
+
+    suspend fun getWebcamSnapshot(url: String): ByteArray? = printerRepo.getWebcamSnapshot(url)
 
     // LED light state (null = unknown/not connected)
     private val _isLightOn = MutableStateFlow<Boolean?>(null)
@@ -366,8 +392,9 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         bambuAccessCode: String = "",
         bambuSerial: String = "",
         bambuModel: BambuModel = BambuModel.P1S,
+        moonrakerApiKey: String? = null,
     ) {
-        viewModelScope.launch {
+        savePrinterSettings {
             val printer = buildPrinter(
                 id = java.util.UUID.randomUUID().toString(),
                 fallbackNickname = "Printer ${(printerList.value.size + 1)}",
@@ -380,6 +407,9 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                 bambuSerial = bambuSerial,
                 bambuModel = bambuModel,
             )
+            if (printer.kind == PrinterKind.MOONRAKER && moonrakerApiKey != null) {
+                apiKeys.put(printer.id, printer.moonrakerUrl, moonrakerApiKey)
+            }
             printersRepo.add(printer)
         }
     }
@@ -393,9 +423,10 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         bambuAccessCode: String = "",
         bambuSerial: String = "",
         bambuModel: BambuModel = BambuModel.P1S,
+        moonrakerApiKey: String? = null,
     ) {
-        viewModelScope.launch {
-            val current = printerList.value.firstOrNull { it.id == id } ?: return@launch
+        savePrinterSettings {
+            val current = printersRepo.config.first()?.printers?.firstOrNull { it.id == id } ?: return@savePrinterSettings
             val updated = buildPrinter(
                     id = current.id,
                     fallbackNickname = current.nickname,
@@ -409,24 +440,47 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
                     bambuModel = bambuModel,
                 )
             val activeId = printersRepo.config.first()?.activeId
-            if (id == activeId && printerConnectionFingerprint(current) != printerConnectionFingerprint(updated)) {
+            val connectionChanged = printerConnectionFingerprint(current) != printerConnectionFingerprint(updated)
+            val credentialChanged = moonrakerApiKey != null &&
+                apiKeys.get(id, current.moonrakerUrl) != moonrakerApiKey.trim().takeIf { it.isNotEmpty() }
+            if (id == activeId && (connectionChanged || credentialChanged)) {
                 invalidateActivePrinterOperations()
-                printerRepo.prepareForActivePrinterSwitch()
             }
+            if (updated.kind == PrinterKind.MOONRAKER && moonrakerApiKey != null) {
+                apiKeys.put(id, updated.moonrakerUrl, moonrakerApiKey)
+            }
+            if (id == activeId && connectionChanged) printerRepo.prepareForActivePrinterSwitch()
             printersRepo.update(updated)
         }
     }
 
     fun deletePrinter(id: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                if (printersRepo.config.first()?.activeId == id) {
-                    invalidateActivePrinterOperations()
-                    printerRepo.prepareForActivePrinterSwitch()
+                switchPrinterMutex.withLock {
+                    val config = printersRepo.config.first() ?: return@withLock
+                    check(config.activeId != id && config.printers.size > 1)
+                    apiKeys.remove(id)
+                    printersRepo.delete(id)
                 }
-                printersRepo.delete(id)
-            } catch (e: IllegalStateException) {
-                _heaterError.value = e.message ?: "Cannot delete printer"
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _configurationError.value = getApplication<Application>()
+                    .getString(com.u1.slicer.R.string.printer_settings_delete_failed)
+            }
+        }
+    }
+
+    private fun savePrinterSettings(block: suspend () -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                switchPrinterMutex.withLock { block() }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _configurationError.value = getApplication<Application>()
+                    .getString(com.u1.slicer.R.string.printer_settings_save_failed)
             }
         }
     }

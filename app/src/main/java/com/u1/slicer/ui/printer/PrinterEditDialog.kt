@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -20,12 +22,18 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import com.u1.slicer.R
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.data.BambuModel
 import com.u1.slicer.data.Printer
@@ -44,6 +52,7 @@ fun PrinterEditDialog(
         bambuAccessCode: String,
         bambuSerial: String,
         bambuModel: BambuModel,
+        moonrakerApiKey: String?,
     ) -> Unit,
     onTest: suspend (
         kind: PrinterKind,
@@ -52,8 +61,10 @@ fun PrinterEditDialog(
         bambuAccessCode: String,
         bambuSerial: String,
         bambuModel: BambuModel,
+        moonrakerApiKey: String?,
     ) -> String?,
     onDismiss: () -> Unit,
+    hasSavedApiKey: suspend (String, String) -> Boolean = { _, _ -> false },
     bambuEnabled: Boolean = false,
 ) {
     var nickname by remember { mutableStateOf(existing?.nickname ?: "") }
@@ -66,15 +77,22 @@ fun PrinterEditDialog(
     var modelExpanded by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
+    // Null keeps a bound saved key; empty explicitly removes it. Never prefill the secret.
+    var apiKeyDraft by remember { mutableStateOf<String?>(null) }
+    var savedApiKey by remember { mutableStateOf(false) }
+    LaunchedEffect(existing?.id, url) {
+        savedApiKey = existing?.id?.let { hasSavedApiKey(it, url) } ?: false
+    }
+    val validApiKey = apiKeyDraft?.let { key -> key.length <= 1024 && key.all { it.code in 32..126 } } != false
     val scope = rememberCoroutineScope()
     val canChangeKind = canChangePrinterKind(existing)
 
     val canSave = when (kind) {
-        PrinterKind.MOONRAKER -> url.isNotBlank()
+        PrinterKind.MOONRAKER -> com.u1.slicer.network.MoonrakerClient.normalizeUrl(url).isNotBlank() && validApiKey
         PrinterKind.BAMBU_LAN -> bambuIp.isNotBlank() && bambuAccessCode.isNotBlank() && bambuSerial.isNotBlank()
     }
     val canTest = when (kind) {
-        PrinterKind.MOONRAKER -> url.isNotBlank()
+        PrinterKind.MOONRAKER -> com.u1.slicer.network.MoonrakerClient.normalizeUrl(url).isNotBlank() && validApiKey
         PrinterKind.BAMBU_LAN -> bambuIp.isNotBlank() && bambuAccessCode.isNotBlank() && bambuSerial.isNotBlank()
     }
 
@@ -82,7 +100,7 @@ fun PrinterEditDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (existing == null) "Add printer" else "Edit printer") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = nickname,
                     onValueChange = { nickname = it },
@@ -135,6 +153,27 @@ fun PrinterEditDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    OutlinedTextField(
+                        value = apiKeyDraft.orEmpty(),
+                        onValueChange = { apiKeyDraft = it.takeIf(String::isNotBlank); testResult = null },
+                        label = { Text(stringResource(R.string.moonraker_api_key)) },
+                        supportingText = { Text(stringResource(when {
+                            !validApiKey -> R.string.moonraker_key_invalid
+                            apiKeyDraft == "" -> R.string.moonraker_key_remove_pending
+                            savedApiKey -> R.string.moonraker_key_kept
+                            else -> R.string.moonraker_key_optional
+                        })) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        isError = !validApiKey,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (savedApiKey || apiKeyDraft != null) {
+                        TextButton(onClick = { apiKeyDraft = ""; testResult = null }) {
+                            Text(stringResource(R.string.moonraker_key_remove))
+                        }
+                    }
                 } else {
                     ExposedDropdownMenuBox(
                         expanded = modelExpanded,
@@ -202,6 +241,7 @@ fun PrinterEditDialog(
                                     bambuAccessCode,
                                     bambuSerial,
                                     bambuModel,
+                                    apiKeyDraft,
                                 ) ?: "OK"
                                 testing = false
                             }
@@ -233,6 +273,7 @@ fun PrinterEditDialog(
                         bambuAccessCode,
                         bambuSerial,
                         bambuModel,
+                        apiKeyDraft,
                     )
                     onDismiss()
                 },

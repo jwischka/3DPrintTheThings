@@ -51,6 +51,7 @@ fun PrintersSettingsCard(
         bambuAccessCode: String,
         bambuSerial: String,
         bambuModel: BambuModel,
+        moonrakerApiKey: String?,
     ) -> Unit,
     onEdit: (
         id: String,
@@ -61,15 +62,19 @@ fun PrintersSettingsCard(
         bambuAccessCode: String,
         bambuSerial: String,
         bambuModel: BambuModel,
+        moonrakerApiKey: String?,
     ) -> Unit,
     onDelete: (id: String) -> Unit,
+    hasSavedApiKey: suspend (String, String) -> Boolean,
     onTestConnection: suspend (
+        printerId: String?,
         kind: PrinterKind,
         url: String,
         bambuIp: String,
         bambuAccessCode: String,
         bambuSerial: String,
         bambuModel: BambuModel,
+        moonrakerApiKey: String?,
     ) -> String?,
     bambuEnabled: Boolean = false,
 ) {
@@ -142,10 +147,12 @@ fun PrintersSettingsCard(
     if (addingNew) {
         PrinterEditDialog(
             existing = null,
-            onSave = { nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel ->
-                onAdd(nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel)
+            onSave = { nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey ->
+                onAdd(nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey)
             },
-            onTest = onTestConnection,
+            onTest = { kind, url, ip, code, serial, model, key ->
+                onTestConnection(null, kind, url, ip, code, serial, model, key)
+            },
             bambuEnabled = bambuEnabled,
             onDismiss = { addingNew = false },
         )
@@ -153,10 +160,13 @@ fun PrintersSettingsCard(
     editing?.let { existing ->
         PrinterEditDialog(
             existing = existing,
-            onSave = { nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel ->
-                onEdit(existing.id, nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel)
+            onSave = { nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey ->
+                onEdit(existing.id, nick, kind, url, bambuIp, bambuAccessCode, bambuSerial, bambuModel, apiKey)
             },
-            onTest = onTestConnection,
+            hasSavedApiKey = hasSavedApiKey,
+            onTest = { kind, url, ip, code, serial, model, key ->
+                onTestConnection(existing.id, kind, url, ip, code, serial, model, key)
+            },
             bambuEnabled = bambuEnabled,
             onDismiss = { editing = null },
         )

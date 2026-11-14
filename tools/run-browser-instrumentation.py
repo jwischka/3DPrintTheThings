@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install UI-only APKs and run exactly the browser instrumentation class."""
+"""Install UI-only APKs and run the isolated UI instrumentation classes."""
 import argparse
 import re
 import subprocess
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest"
+TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest"
 RUNNER = "io.github.jwischka.threedprintthethings.test/androidx.test.runner.AndroidJUnitRunner"
 
 

@@ -43,6 +43,7 @@ interface PrinterTransport {
     suspend fun stop() {}
     suspend fun testConnection(): String?
     suspend fun queryWebcamSnapshotCandidates(): List<String> = emptyList()
+    suspend fun getWebcamSnapshot(url: String): ByteArray? = null
     suspend fun wakeCamera() {}
     suspend fun queryFilamentSlots(): List<FilamentSlot>? = null
     suspend fun getLedState(): Boolean? = null

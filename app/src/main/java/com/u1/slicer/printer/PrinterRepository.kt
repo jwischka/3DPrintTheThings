@@ -18,12 +18,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class PrinterRepository(
     private val appContext: android.content.Context,
     private val printersRepo: com.u1.slicer.data.PrintersRepository,
     private val transportFactory: PrinterTransportFactory,
+    credentialRevisions: Flow<Map<String, Long>> = flowOf(emptyMap()),
 ) {
     private val _status = MutableStateFlow(PrinterStatus(state = "disconnected", progress = 0f))
     val status: StateFlow<PrinterStatus> = _status.asStateFlow()
@@ -49,6 +54,7 @@ class PrinterRepository(
     val filamentSlots: StateFlow<List<FilamentSlot>> = _filamentSlots.asStateFlow()
 
     private var activePrinter: Printer? = null
+    private var activeCredentialRevision = -1L
     @Volatile private var currentTransport: PrinterTransport? = null
     @Volatile private var controlBinding: Pair<String, PrinterTransport>? = null
     private var statusCollectionJob: Job? = null
@@ -66,18 +72,21 @@ class PrinterRepository(
 
     init {
         repositoryScope.launch {
-            printersRepo.config.collectLatest { cfg ->
+            combine(printersRepo.config, credentialRevisions) { cfg, revisions ->
+                cfg to (revisions[cfg?.activeId] ?: 0L)
+            }.distinctUntilChanged().collectLatest { (cfg, revision) ->
                 val active = cfg?.active ?: return@collectLatest
-                rebind(active)
+                rebind(active, revision)
                 _activeNickname.value = active.nickname
                 _printerCount.value = cfg.printers.size
             }
         }
     }
 
-    private suspend fun rebind(newPrinter: Printer) {
+    private suspend fun rebind(newPrinter: Printer, credentialRevision: Long) {
         val existingPrinter = activePrinter
-        if (!shouldRecreateTransport(existingPrinter, newPrinter) && currentTransport != null) {
+        if (!shouldRecreateTransport(existingPrinter, newPrinter) && currentTransport != null &&
+            activeCredentialRevision == credentialRevision) {
             activePrinter = newPrinter
             controlBinding = currentTransport?.let { newPrinter.id to it }
             _activeNickname.value = newPrinter.nickname
@@ -94,6 +103,7 @@ class PrinterRepository(
         stopPollingInternal(currentTransport)
         activePrinter = newPrinter
         currentTransport = transportFactory.create(newPrinter)
+        activeCredentialRevision = credentialRevision
         controlBinding = currentTransport?.let { newPrinter.id to it }
         consecutiveFailures = 0
         previousEffectiveState = "disconnected"
@@ -275,6 +285,8 @@ class PrinterRepository(
 
     suspend fun queryWebcamSnapshotCandidates(): List<String> =
         currentTransport?.queryWebcamSnapshotCandidates() ?: emptyList()
+
+    suspend fun getWebcamSnapshot(url: String): ByteArray? = currentTransport?.getWebcamSnapshot(url)
 
     suspend fun wakeCamera() {
         currentTransport?.wakeCamera()

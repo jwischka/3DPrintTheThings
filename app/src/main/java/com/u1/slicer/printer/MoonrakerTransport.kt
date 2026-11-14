@@ -78,6 +78,8 @@ class MoonrakerTransport(
     override suspend fun queryWebcamSnapshotCandidates(): List<String> =
         client.queryWebcamSnapshotCandidates()
 
+    override suspend fun getWebcamSnapshot(url: String): ByteArray? = client.fetchSnapshot(url)
+
     override suspend fun wakeCamera() {
         client.wakeCamera()
     }

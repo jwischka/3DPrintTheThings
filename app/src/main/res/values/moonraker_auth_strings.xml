@@ -1,0 +1,11 @@
+<resources>
+    <string name="moonraker_api_key">Moonraker API key</string>
+    <string name="moonraker_key_optional">Optional. Stored only on this device, outside backups.</string>
+    <string name="moonraker_key_kept">A key is saved for this address. Leave blank to keep it.</string>
+    <string name="moonraker_key_remove">Remove saved key</string>
+    <string name="moonraker_key_remove_pending">The saved key will be removed when you save.</string>
+    <string name="moonraker_key_invalid">Enter a valid API key without line breaks.</string>
+    <string name="printer_settings_save_failed">Could not save the printer settings. Check the address and API key, then try again.</string>
+    <string name="printer_settings_delete_failed">Could not delete the printer. Switch to another printer first, then try again.</string>
+    <string name="printer_connection_test_failed">Could not test the connection. Check the address and API key.</string>
+</resources>

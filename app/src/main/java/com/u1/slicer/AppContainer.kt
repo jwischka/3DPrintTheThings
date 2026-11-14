@@ -31,14 +31,17 @@ class AppContainer(context: Context) {
         )
     }
     val printersRepository = PrintersRepository(context.applicationContext)
+    val moonrakerApiKeys = com.u1.slicer.data.MoonrakerApiKeyStore(context.noBackupFilesDir)
     val processProfilesRepository = ProcessProfilesRepository(context.applicationContext)
     val printerTransportFactory = DefaultPrinterTransportFactory(
         bambuClientFactory = bambuLanClientFactory,
+        moonrakerApiKey = { printer -> moonrakerApiKeys.get(printer.id, printer.moonrakerUrl) },
     )
     val printerRepository = PrinterRepository(
         context.applicationContext,
         printersRepository,
         printerTransportFactory,
+        moonrakerApiKeys.revisions,
     )
 
     val database = AppDatabase.getInstance(context)

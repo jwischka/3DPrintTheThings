@@ -24,14 +24,61 @@ import kotlin.coroutines.resume
  *
  * Ported from u1-slicer-bridge: moonraker.py
  */
-class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
+class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
     private val TAG = "MoonrakerClient"
     private val remoteScreenProber = RemoteScreenProber()
+    private val authLock = Any()
+    @Volatile private var client: OkHttpClient = baseClient
+    @Volatile private var apiKeyScope: ApiKeyScope? = null
+
+    private class ApiKeyScope(val base: HttpUrl, val key: String) {
+        fun includes(url: HttpUrl): Boolean {
+            if (url.scheme != base.scheme || url.host != base.host || url.port != base.port) return false
+            val prefix = base.encodedPath.trimEnd('/')
+            return prefix.isEmpty() || url.encodedPath == prefix || url.encodedPath.startsWith("$prefix/")
+        }
+    }
 
     var baseUrl: String = ""
         set(value) {
-            field = normalizeUrl(value)
+            val normalized = normalizeUrl(value)
+            synchronized(authLock) {
+                if (normalized != field) {
+                    apiKeyScope = null
+                    client = baseClient
+                }
+                field = normalized
+            }
         }
+
+    /** Bind a key to the currently configured Moonraker origin and route prefix. */
+    fun configureApiKey(key: String?) {
+        if (key != null) {
+            require(key.length in 1..1024 && key.all { it.code in 32..126 } && key.isNotBlank()) {
+                "Invalid Moonraker API key"
+            }
+        }
+        val normalizedKey = key?.trim()
+        synchronized(authLock) {
+            if (normalizedKey == null) {
+                apiKeyScope = null
+                client = baseClient
+                return
+            }
+            val base = baseUrl.toHttpUrlOrNull() ?: throw IllegalArgumentException("Configure a printer URL first")
+            val scope = ApiKeyScope(base, normalizedKey)
+            val scopedClient = baseClient.newBuilder()
+                .addNetworkInterceptor { chain ->
+                    val request = chain.request()
+                    val builder = request.newBuilder().removeHeader("X-Api-Key")
+                    if (scope.includes(request.url)) builder.header("X-Api-Key", scope.key)
+                    chain.proceed(builder.build())
+                }
+                .build()
+            apiKeyScope = scope
+            client = scopedClient
+        }
+    }
 
     /**
      * Query Moonraker's webcam list and return snapshot URL candidates for the first webcam.
@@ -64,14 +111,13 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
                             alt.takeIf { it.isNotBlank() && it != primary }
                         )
                         if (candidates.isNotEmpty()) {
-                            Log.d(TAG, "Webcam candidates: $candidates")
                             return@withContext candidates + monitorUrl
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "Webcam list unavailable, using legacy fallback: ${e.message}")
+        } catch (_: Exception) {
+            Log.d(TAG, "Webcam list unavailable, using legacy fallback")
         }
         // Legacy fallback: mjpeg-streamer style + monitor.jpg
         listOf("$baseUrl/webcam/?action=snapshot", monitorUrl)
@@ -90,18 +136,22 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
                 baseUrl.startsWith("https://") -> "wss://" + baseUrl.removePrefix("https://")
                 else -> "ws://" + baseUrl.removePrefix("http://")
             } + "/websocket"
-            val request = Request.Builder().url(wsUrl).build()
-            client.newWebSocket(request, object : WebSocketListener() {
+            val requestBuilder = Request.Builder().url(wsUrl)
+            apiKeyScope?.takeIf { it.includes(requestBuilder.build().url) }
+                ?.let { requestBuilder.header("X-Api-Key", it.key) }
+            val request = requestBuilder.build()
+            client.newBuilder().followRedirects(false).followSslRedirects(false)
+                .build().newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send("""{"jsonrpc":"2.0","id":1000,"method":"camera.start_monitor","params":{"domain":"lan","interval":0}}""")
                     webSocket.close(1000, null)
                 }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.d(TAG, "wakeCamera failed: ${t.message}")
+                    Log.d(TAG, "wakeCamera failed")
                 }
             })
-        } catch (e: Exception) {
-            Log.d(TAG, "wakeCamera failed: ${e.message}")
+        } catch (_: Exception) {
+            Log.d(TAG, "wakeCamera failed")
         }
     }
 
@@ -160,6 +210,45 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
     /** Null when Klippy is ready and no print is active; a reason otherwise. */
     suspend fun validateStartJob(): String? = MoonrakerPreflight(client).check(baseUrl)
 
+    /** Fetch a camera snapshot with the same scoped auth policy as Moonraker HTTP calls. */
+    suspend fun fetchSnapshot(snapshotUrl: String): ByteArray? {
+        val parsed = snapshotUrl.toHttpUrlOrNull() ?: return null
+        if (parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) return null
+        val request = Request.Builder().url(parsed).get().build()
+        val snapshotClient = client.newBuilder()
+            .callTimeout(3, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = snapshotClient.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) continuation.resume(null)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val bytes = try {
+                        response.use {
+                            val body = response.body
+                            if (!response.isSuccessful || body == null || body.contentLength() > 8_388_608L) {
+                                null
+                            } else {
+                                val source = body.source()
+                                source.request(8_388_609L)
+                                if (source.buffer.size > 8_388_608L) null
+                                else source.buffer.clone().readByteArray().takeIf { it.isNotEmpty() }
+                            }
+                        }
+                    } catch (_: IOException) { null }
+                    if (continuation.isActive) continuation.resume(bytes)
+                }
+            })
+        }
+    }
+
     /**
      * Test connection to the printer.
      * @return null on success, or a human-readable error string on failure.
@@ -183,8 +272,8 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
         } catch (e: java.net.UnknownHostException) {
             "Unknown host — check URL"
         } catch (e: Exception) {
-            Log.w(TAG, "Connection test failed: ${e.message}")
-            e.message?.take(100) ?: "Connection failed"
+            Log.w(TAG, "Connection test failed")
+            "Connection failed"
         }
     }
 
@@ -271,7 +360,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
                 extruders = extruders
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get status: ${e.message}")
+            Log.w(TAG, "Failed to get status")
             PrinterStatus(state = "disconnected", progress = 0f)
         }
     }
@@ -335,7 +424,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
             }
             slots.takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
-            Log.w(TAG, "print_task_config query failed: ${e.message}")
+            Log.w(TAG, "print_task_config query failed")
             null
         }
     }
@@ -389,7 +478,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
             }
             slots.takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
-            Log.w(TAG, "AFC query failed: ${e.message}")
+            Log.w(TAG, "AFC query failed")
             null
         }
     }
@@ -423,10 +512,13 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
         onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): MoonrakerUploadResult {
         if (!file.isFile || file.length() == 0L) return MoonrakerUploadResult.Failure("G-code file is empty or missing")
+        val (uploadClientBase, uploadKey, uploadBaseUrl) = synchronized(authLock) {
+            Triple(client, apiKeyScope?.key, baseUrl)
+        }
         val total = file.length()
         val fileSizeMb = total / (1024 * 1024)
         val timeout = maxOf(30L, minOf(300L, fileSizeMb))
-        val uploadClient = client.newBuilder()
+        val uploadClient = uploadClientBase.newBuilder()
             .writeTimeout(timeout, TimeUnit.SECONDS)
             .readTimeout(timeout, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
@@ -453,7 +545,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
             }
         }
         val request = try {
-            Request.Builder().url(url("/server/files/upload"))
+            Request.Builder().url("$uploadBaseUrl/server/files/upload")
                 .post(MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("file", filename, countingBody).build())
                 .build()
@@ -485,7 +577,9 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
                             val message = runCatching {
                                 parsed?.optJSONObject("error")?.optString("message")
                                     ?: parsed?.optString("message")
-                            }.getOrNull()?.trim()?.replace(Regex("[\\p{Cntrl}]+"), " ")
+                            }.getOrNull()?.trim()
+                                ?.let { raw -> if (uploadKey != null) raw.replace(uploadKey, "[redacted]") else raw }
+                                ?.replace(Regex("[\\p{Cntrl}]+"), " ")
                                 ?.take(300)?.takeIf { it.isNotBlank() }
                             val confirmed = !oversized && parsed?.optJSONObject("result")?.let { result ->
                                 result.optJSONObject("item") != null || (result.has("path") && result.has("root"))
@@ -551,7 +645,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
                 w > 0
             } else null
         } catch (e: Exception) {
-            Log.d(TAG, "LED state query failed: ${e.message}")
+            Log.d(TAG, "LED state query failed")
             null
         }
     }
@@ -572,7 +666,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
             response.close()
             ok
         } catch (e: Exception) {
-            Log.w(TAG, "Set LED failed: ${e.message}")
+            Log.w(TAG, "Set LED failed")
             false
         }
     }
@@ -592,7 +686,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
             response.close()
             ok
         } catch (e: Exception) {
-            Log.w(TAG, "sendGcode failed: ${e.message}")
+            Log.w(TAG, "sendGcode failed")
             false
         }
     }
@@ -616,7 +710,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
             response.close()
             ok
         } catch (e: Exception) {
-            Log.w(TAG, "Command failed ($path): ${e.message}")
+            Log.w(TAG, "Command failed")
             false
         }
     }
