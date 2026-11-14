@@ -110,6 +110,21 @@ class PrinterViewModelTest {
     }
 
     @Test
+    fun `camera keepalive is required for monitor snapshot including proxy path and query`() {
+        assertTrue(PrinterViewModel.requiresCameraKeepalive("http://printer.local/camera/monitor.jpg"))
+        assertTrue(PrinterViewModel.requiresCameraKeepalive(
+            "https://proxy.example/moonraker/camera/monitor.jpg?token=temporary"
+        ))
+    }
+
+    @Test
+    fun `camera keepalive is not required for normal snapshot nonmonitor or missing URL`() {
+        assertFalse(PrinterViewModel.requiresCameraKeepalive("http://printer.local/webcam/?action=snapshot"))
+        assertFalse(PrinterViewModel.requiresCameraKeepalive("http://printer.local/camera/snapshot.jpg"))
+        assertFalse(PrinterViewModel.requiresCameraKeepalive(null))
+    }
+
+    @Test
     fun `shouldPollLedOnConnectionEdge returns true only on rising connection edge`() {
         assertTrue(PrinterViewModel.shouldPollLedOnConnectionEdge(wasConnected = false, isConnected = true))
         assertFalse(PrinterViewModel.shouldPollLedOnConnectionEdge(wasConnected = true, isConnected = true))

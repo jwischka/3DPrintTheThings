@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.u1.slicer.buildBambuSlotPresets
 import com.u1.slicer.gcode.ExcludeObjectInfo
 import com.u1.slicer.ui.printer.buildPrinterSubtitle
+import com.u1.slicer.ui.printer.CancelPrintDialog
 import com.u1.slicer.ui.printer.shouldShowActivePrinterSelector
 import java.util.concurrent.TimeUnit
 
@@ -96,6 +97,8 @@ fun PrinterScreen(
     val printerList by viewModel.printerList.collectAsState()
     val activePrinterId by viewModel.activePrinterId.collectAsState()
     val activePrinter by viewModel.activePrinter.collectAsState()
+    var showCancelConfirmation by remember(activePrinterId) { mutableStateOf(false) }
+    val controlError by viewModel.controlError.collectAsState()
     val capabilities by viewModel.capabilities.collectAsState()
     val printerFilamentSlots by viewModel.printerFilamentSlots.collectAsState()
     val cameraState by viewModel.cameraState.collectAsState()
@@ -120,8 +123,25 @@ fun PrinterScreen(
     LaunchedEffect(heaterError) {
         heaterError?.let { snackbarHostState.showSnackbar(it); viewModel.clearHeaterError() }
     }
+    LaunchedEffect(controlError) {
+        controlError?.let { snackbarHostState.showSnackbar(it); viewModel.clearControlError() }
+    }
     LaunchedEffect(status.isPrinting, status.isPaused) {
-        if (!status.isPrinting && !status.isPaused) editingHeater = null
+        if (!status.isPrinting && !status.isPaused) {
+            editingHeater = null
+            showCancelConfirmation = false
+        }
+    }
+    if (showCancelConfirmation) {
+        val printerId = activePrinterId
+        CancelPrintDialog(
+            printerName = activePrinter?.nickname.orEmpty(),
+            onConfirm = {
+                showCancelConfirmation = false
+                if (printerId != null) viewModel.cancelPrint(printerId)
+            },
+            onDismiss = { showCancelConfirmation = false },
+        )
     }
 
     // Camera feed polling
@@ -131,6 +151,7 @@ fun PrinterScreen(
 
     LaunchedEffect(webcamCandidates) {
         candidateIndex = 0
+        cameraFrame = null
         if (webcamCandidates.isEmpty()) return@LaunchedEffect
         val http = OkHttpClient.Builder()
             .connectTimeout(3, TimeUnit.SECONDS)
@@ -143,16 +164,19 @@ fun PrinterScreen(
             val pollUrl = "$baseUrl${sep}_cb=${System.currentTimeMillis()}"
             try {
                 val bytes = withContext(Dispatchers.IO) {
-                    val resp = http.newCall(Request.Builder().url(pollUrl).build()).execute()
-                    val b = resp.body?.bytes()
-                    resp.close()
-                    b
+                    http.newCall(Request.Builder().url(pollUrl).build()).execute().use { response ->
+                        if (response.isSuccessful) response.body?.bytes() else null
+                    }
                 }
                 if (bytes != null) {
-                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    val bmp = withContext(Dispatchers.Default) {
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
                     if (bmp != null) cameraFrame = bmp
                     else if (candidateIndex < webcamCandidates.size - 1) candidateIndex++
                 } else if (candidateIndex < webcamCandidates.size - 1) candidateIndex++
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 if (candidateIndex < webcamCandidates.size - 1) candidateIndex++
             }
@@ -175,8 +199,9 @@ fun PrinterScreen(
         }
     }
 
-    DisposableEffect(Unit) {
-        viewModel.startCameraKeepalive()
+    val snapshotUrl = webcamCandidates.getOrNull(candidateIndex)
+    DisposableEffect(snapshotUrl) {
+        if (PrinterViewModel.requiresCameraKeepalive(snapshotUrl)) viewModel.startCameraKeepalive()
         onDispose { viewModel.stopCameraKeepalive() }
     }
 
@@ -320,7 +345,7 @@ fun PrinterScreen(
                             activePrinter?.kind == com.u1.slicer.data.PrinterKind.MOONRAKER
                         }
                         if (progress != null && !progress.awaitingResponse) {
-                            CircularProgressIndicator(progress = progress.fraction,
+                            CircularProgressIndicator(progress = { progress.fraction },
                                 modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
                         } else {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
@@ -630,7 +655,7 @@ fun PrinterScreen(
                                     }
                                     if (capabilities.supportsCancel) {
                                         Button(
-                                            onClick = { viewModel.cancelPrint() },
+                                            onClick = { showCancelConfirmation = true },
                                             modifier = Modifier.weight(1f),
                                             shape = RoundedCornerShape(12.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)

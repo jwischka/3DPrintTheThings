@@ -1,0 +1,6 @@
+<resources>
+    <string name="printer_cancel_print_title">Cancel print?</string>
+    <string name="printer_cancel_print_message">Cancel the current print on %1$s? The printer will stop the job, and this cannot be undone.</string>
+    <string name="printer_cancel_print_confirm">Cancel print</string>
+    <string name="printer_cancel_print_dismiss">Keep current job</string>
+</resources>

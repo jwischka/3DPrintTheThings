@@ -21,22 +21,8 @@ import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/**
- * Tests for MoonrakerClient using MockWebServer.
- *
- * Note: MoonrakerClient uses android.util.Log internally.
- * These tests will fail on JVM without mocking Log. For full coverage,
- * see the instrumented test variant. These tests verify the HTTP
- * request/response contract.
- *
- * To run these on JVM, you'd need to add a Log stub or use Robolectric.
- * For now these are structured as instrumented-compatible tests.
- */
+/** JVM tests for Moonraker's local HTTP contract and parsing helpers. */
 class MoonrakerClientTest {
-
-    // These tests document the expected API contract even if they can't
-    // run on pure JVM due to android.util.Log dependency.
-    // Move to androidTest/ if needed.
 
     // --- URL normalization tests ---
 
@@ -104,6 +90,9 @@ class MoonrakerClientTest {
         val explicitDefaultPort = "http://printer.local:80"
         assertEquals(explicitDefaultPort, MoonrakerClient.normalizeUrl(explicitDefaultPort))
         assertEquals(explicitDefaultPort, MoonrakerClient.normalizeUrl(MoonrakerClient.normalizeUrl(explicitDefaultPort)))
+        for (unsupported in listOf("ftp://printer.local", "file://printer.local/path", "javascript://printer.local")) {
+            assertEquals("Unsupported scheme must not become HTTP", "", MoonrakerClient.normalizeUrl(unsupported))
+        }
     }
 
     @Test

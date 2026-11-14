@@ -50,6 +50,7 @@ class PrinterRepository(
 
     private var activePrinter: Printer? = null
     @Volatile private var currentTransport: PrinterTransport? = null
+    @Volatile private var controlBinding: Pair<String, PrinterTransport>? = null
     private var statusCollectionJob: Job? = null
     private var cameraCollectionJob: Job? = null
     private var filamentCollectionJob: Job? = null
@@ -78,6 +79,7 @@ class PrinterRepository(
         val existingPrinter = activePrinter
         if (!shouldRecreateTransport(existingPrinter, newPrinter) && currentTransport != null) {
             activePrinter = newPrinter
+            controlBinding = currentTransport?.let { newPrinter.id to it }
             _activeNickname.value = newPrinter.nickname
             _printerUrl.value = when (newPrinter.kind) {
                 PrinterKind.MOONRAKER -> MoonrakerClient.normalizeUrl(newPrinter.moonrakerUrl)
@@ -87,10 +89,12 @@ class PrinterRepository(
         }
         val wasPolling = pollingScope != null
         val scope = pollingScope
+        controlBinding = null
         lifecycleJob?.cancelAndJoin()
         stopPollingInternal(currentTransport)
         activePrinter = newPrinter
         currentTransport = transportFactory.create(newPrinter)
+        controlBinding = currentTransport?.let { newPrinter.id to it }
         consecutiveFailures = 0
         previousEffectiveState = "disconnected"
         _printerUrl.value = when (newPrinter.kind) {
@@ -175,6 +179,7 @@ class PrinterRepository(
         // MQTT disconnect can block in vendor code.  Cancel the old work and
         // detach its collectors before changing the active printer; finish the
         // physical disconnect in the background so the selector always responds.
+        controlBinding = null
         lifecycleJob?.cancel()
         lifecycleJob = null
         val previousTransport = currentTransport
@@ -211,23 +216,7 @@ class PrinterRepository(
     ): TransportCommandResult {
         val uploadName = buildPrinterUploadFilename(filename)
         val transport = currentTransport ?: return TransportCommandResult.Failure("No printer configured")
-        when (val uploaded = transport.uploadJob(gcodeFile, uploadName, onProgress)) {
-            TransportCommandResult.Success -> Unit
-            is TransportCommandResult.Unsupported -> return uploaded
-            is TransportCommandResult.Failure -> return uploaded
-        }
-        currentCoroutineContext().ensureActive()
-        if (currentTransport !== transport) {
-            return TransportCommandResult.Failure("Active printer changed after upload; the print was not started")
-        }
-        return when (val started = transport.startJob(uploadName)) {
-            TransportCommandResult.Success -> {
-                transport.hintJobStarting()
-                TransportCommandResult.Success
-            }
-            is TransportCommandResult.Unsupported -> started
-            is TransportCommandResult.Failure -> started
-        }
+        return uploadAndStartJob(transport, gcodeFile, uploadName, onProgress) { currentTransport === transport }
     }
 
     suspend fun uploadOnly(
@@ -293,9 +282,26 @@ class PrinterRepository(
 
     suspend fun queryFilamentSlots(): List<FilamentSlot>? = currentTransport?.queryFilamentSlots()
 
-    suspend fun pausePrint(): Boolean = currentTransport?.pauseJob().succeeded()
-    suspend fun resumePrint(): Boolean = currentTransport?.resumeJob().succeeded()
-    suspend fun cancelPrint(): Boolean = currentTransport?.cancelJob().succeeded()
+    private suspend fun controlPrinter(
+        expectedPrinterId: String?, command: suspend (PrinterTransport) -> TransportCommandResult,
+    ): TransportCommandResult {
+        val binding = controlBinding ?: return TransportCommandResult.Failure("No printer configured")
+        if (expectedPrinterId != null && binding.first != expectedPrinterId) {
+            return TransportCommandResult.Failure("Active printer changed; command was not sent")
+        }
+        return command(binding.second)
+    }
+
+    suspend fun pausePrintResult(expectedPrinterId: String? = null): TransportCommandResult =
+        controlPrinter(expectedPrinterId) { it.pauseJob() }
+    suspend fun resumePrintResult(expectedPrinterId: String? = null): TransportCommandResult =
+        controlPrinter(expectedPrinterId) { it.resumeJob() }
+    suspend fun cancelPrintResult(expectedPrinterId: String? = null): TransportCommandResult =
+        controlPrinter(expectedPrinterId) { it.cancelJob() }
+
+    suspend fun pausePrint(): Boolean = pausePrintResult().succeeded()
+    suspend fun resumePrint(): Boolean = resumePrintResult().succeeded()
+    suspend fun cancelPrint(): Boolean = cancelPrintResult().succeeded()
 
     suspend fun sendGcode(gcode: String): Boolean = currentTransport?.sendGcode(gcode).succeeded()
 

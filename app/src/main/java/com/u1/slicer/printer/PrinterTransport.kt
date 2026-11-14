@@ -66,6 +66,8 @@ interface PrinterTransport {
 
     suspend fun validateStartProject(): TransportCommandResult = TransportCommandResult.Success
 
+    suspend fun validateStartJob(): TransportCommandResult = TransportCommandResult.Success
+
     suspend fun startJob(remoteName: String): TransportCommandResult =
         TransportCommandResult.Unsupported("Start print is not supported for this printer")
 

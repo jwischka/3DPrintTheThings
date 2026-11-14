@@ -132,6 +132,7 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
         fun normalizeUrl(raw: String): String {
             val value = raw.trim()
             if (value.isEmpty()) return ""
+            if ("://" in value && !value.startsWith("http://", true) && !value.startsWith("https://", true)) return ""
             val candidate = if (value.startsWith("http://", true) || value.startsWith("https://", true)) value else "http://$value"
             val uri = runCatching { java.net.URI(candidate) }.getOrNull() ?: return ""
             val parsed = candidate.toHttpUrlOrNull() ?: return ""
@@ -155,6 +156,9 @@ class MoonrakerClient(private val client: OkHttpClient = defaultClient()) {
     }
 
     private fun url(path: String): String = "$baseUrl$path"
+
+    /** Null when Klippy is ready and no print is active; a reason otherwise. */
+    suspend fun validateStartJob(): String? = MoonrakerPreflight(client).check(baseUrl)
 
     /**
      * Test connection to the printer.

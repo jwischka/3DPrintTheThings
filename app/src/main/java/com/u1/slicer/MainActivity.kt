@@ -2703,6 +2703,7 @@ fun PreviewScreen(
     val activePrinter by printerViewModel.activePrinter.collectAsState()
     val printerCapabilities by printerViewModel.capabilities.collectAsState()
     val printerFilamentSlots by printerViewModel.printerFilamentSlots.collectAsState()
+    val livePrinterStatus by printerViewModel.status.collectAsState()
     val effectiveSliceTarget by viewModel.effectiveSliceTarget.collectAsState()
     val latestSliceArtifact by viewModel.latestSliceArtifact.collectAsState()
     val resolvedFilamentColors by viewModel.resolvedFilamentColors.collectAsState()
@@ -2944,7 +2945,8 @@ fun PreviewScreen(
                             supportsStartProject = printerCapabilities.supportsStartProject,
                             hasLiveAmsSlots = printerFilamentSlots.isNotEmpty(),
                         ) && canSendSliceArtifactToPrinter(latestSliceArtifact, activePrinter)
-                    } else printerCapabilities.supportsUpload && printerCapabilities.supportsStartJob &&
+                    } else livePrinterStatus.isConnected && !livePrinterStatus.isPrinting && !livePrinterStatus.isPaused &&
+                        printerCapabilities.supportsUpload && printerCapabilities.supportsStartJob &&
                         canSendSliceArtifactToPrinter(latestSliceArtifact, activePrinter),
                     canUploadOnly = if (activePrinter?.kind == com.u1.slicer.data.PrinterKind.BAMBU_LAN) {
                         previewBambuProject != null && printerCapabilities.supportsUpload &&
@@ -2952,6 +2954,11 @@ fun PreviewScreen(
                     } else printerCapabilities.supportsUpload &&
                         canSendSliceArtifactToPrinter(latestSliceArtifact, activePrinter),
                     betaNotice = when {
+                        activePrinter?.kind == com.u1.slicer.data.PrinterKind.MOONRAKER && !livePrinterStatus.isConnected ->
+                            androidx.compose.ui.res.stringResource(R.string.transfer_printer_offline)
+                        activePrinter?.kind == com.u1.slicer.data.PrinterKind.MOONRAKER &&
+                            (livePrinterStatus.isPrinting || livePrinterStatus.isPaused) ->
+                            androidx.compose.ui.res.stringResource(R.string.transfer_printer_busy)
                         activePrinter?.kind != com.u1.slicer.data.PrinterKind.BAMBU_LAN -> null
                         !canSendSliceArtifactToPrinter(latestSliceArtifact, activePrinter) ->
                             "This slice was created for a different printer. Slice again for the active printer before sending."

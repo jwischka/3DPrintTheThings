@@ -121,6 +121,10 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     val sendingState: StateFlow<SendingState> = _sendingState.asStateFlow()
     private val _uploadProgress = UploadProgressTracker()
     val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.progress
+    private val _controlError = MutableStateFlow<String?>(null)
+    val controlError: StateFlow<String?> = _controlError.asStateFlow()
+
+    fun clearControlError() { _controlError.value = null }
 
     // LED light state (null = unknown/not connected)
     private val _isLightOn = MutableStateFlow<Boolean?>(null)
@@ -683,15 +687,32 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun pausePrint() {
-        launchBoundPrinterAction { printerRepo.pausePrint() }
+        launchPrinterControl { id -> printerRepo.pausePrintResult(id) }
     }
 
     fun resumePrint() {
-        launchBoundPrinterAction { printerRepo.resumePrint() }
+        launchPrinterControl { id -> printerRepo.resumePrintResult(id) }
     }
 
-    fun cancelPrint() {
-        launchBoundPrinterAction { printerRepo.cancelPrint() }
+    fun cancelPrint(expectedPrinterId: String? = null) {
+        launchPrinterControl(expectedPrinterId) { id -> printerRepo.cancelPrintResult(id) }
+    }
+
+    private fun launchPrinterControl(
+        expectedPrinterId: String? = null,
+        command: suspend (String?) -> TransportCommandResult,
+    ) {
+        launchBoundPrinterAction { context ->
+            if (expectedPrinterId != null && expectedPrinterId != context.printerId) return@launchBoundPrinterAction
+            val result = command(context.printerId)
+            if (isCurrentPrinterAction(context)) {
+                _controlError.value = when (result) {
+                    TransportCommandResult.Success -> null
+                    is TransportCommandResult.Failure -> result.reason
+                    is TransportCommandResult.Unsupported -> result.reason
+                }
+            }
+        }
     }
 
     fun skipObject(name: String) {
@@ -754,6 +775,10 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         }
 
         internal fun shouldStartCameraKeepalive(hasActiveJob: Boolean): Boolean = !hasActiveJob
+
+        internal fun requiresCameraKeepalive(snapshotUrl: String?): Boolean =
+            runCatching { java.net.URI(snapshotUrl.orEmpty()).path.endsWith("/camera/monitor.jpg") }
+                .getOrDefault(false)
 
         internal fun shouldPollLedOnConnectionEdge(wasConnected: Boolean, isConnected: Boolean): Boolean =
             isConnected && !wasConnected
@@ -981,6 +1006,7 @@ class PrinterViewModel(application: Application) : AndroidViewModel(application)
         _syncState.value = SyncState.Idle
         _sendingState.value = SendingState.Idle
         _uploadProgress.begin()
+        _controlError.value = null
         _remoteScreenAvailable.value = false
         _webcamCandidates.value = emptyList()
         _isLightOn.value = null

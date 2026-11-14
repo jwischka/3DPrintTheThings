@@ -71,6 +71,10 @@ class MoonrakerTransport(
 
     override suspend fun testConnection(): String? = client.testConnection()
 
+    override suspend fun validateStartJob(): TransportCommandResult =
+        client.validateStartJob()?.let(TransportCommandResult::Failure)
+            ?: TransportCommandResult.Success
+
     override suspend fun queryWebcamSnapshotCandidates(): List<String> =
         client.queryWebcamSnapshotCandidates()
 
