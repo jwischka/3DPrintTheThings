@@ -16,6 +16,8 @@ Run the relevant unit tests before each commit. Run at most two Gradle builds at
 
 ## Boundaries and safety
 
+Current owner authorization (November 14): proceed with reproducible native builds, an experimental x86_64 engine for Linux CI emulators, a desktop parity harness, simulated-printer workflows, and library/UI improvements. Native build work is now Phase 2 and may initialize the pinned engine sources. Keep experimental engine artifacts separate; do not replace the shipped ARM64 libraries or change JNI-bound contracts without verified compatibility. The development host is Windows ARM64; x86_64 Linux builders/emulators run remotely in CI. Read-only requests to the owner's supplied U1 are authorized for validation; real uploads, movement, heating and print starts remain owner-run. Never commit private printer captures or credentials.
+
 - Phase 1 is Kotlin-only. Do not change native code, JNI declarations, `NativeLibrary.kt` signatures, or fields in `data/SliceConfig` and `data/ModelInfo`; the shipped `.so` binds to them by name. Do not initialize the Orca submodule before Phase 2.
 - Keep out of `SlicerViewModel.kt` and `MainActivity.kt` except at the seam named by the task. Do not edit `startSlicing` in Phase 1.
 - Never weaken or delete a test assertion. Upstream structural/source-grep tests may need a same-commit update when legitimate changes break them; explain the reason.

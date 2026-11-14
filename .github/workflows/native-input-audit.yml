@@ -1,0 +1,38 @@
+name: Native input audit (no engine build)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/native-input-audit.yml'
+      - 'scripts/native/audit-inputs.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install exact Android NDK
+        run: sdkmanager 'ndk;26.1.10909125'
+      - name: Inspect pinned engine and toolchain inputs
+        env:
+          NATIVE_AUDIT_DIR: ${{ runner.temp }}/native-audit
+        run: |
+          set -o pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          mkdir -p native-audit-report
+          bash scripts/native/audit-inputs.sh 2>&1 | tee native-audit-report/audit.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-input-audit
+          path: native-audit-report/
+          if-no-files-found: warn
