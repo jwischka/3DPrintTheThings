@@ -57,6 +57,13 @@ build_nlopt() {
     test -f "$prefix/nlopt/lib/libnlopt.a"
 }
 
+build_libnoise() {
+    fetch libnoise
+    cmake_build libnoise
+    test -f "$prefix/libnoise/include/libnoise/noise.h"
+    test -f "$prefix/libnoise/lib/liblibnoise_static.a"
+}
+
 build_jpeg() {
     fetch jpeg
     cmake_build jpeg -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_SIMD=OFF -DWITH_TURBOJPEG=OFF
@@ -91,8 +98,8 @@ build_openssl() {
 }
 
 case "$component" in
-    nlopt|jpeg|libpng|openssl) "build_$component" ;;
-    all) build_nlopt; build_jpeg; build_libpng; build_openssl ;;
+    nlopt|jpeg|libpng|openssl|libnoise) "build_$component" ;;
+    all) build_nlopt; build_jpeg; build_libpng; build_openssl; build_libnoise ;;
     *) echo "Unknown component: $component" >&2; exit 1 ;;
 esac
 echo "Built extra real dependencies ($component) for $abi under $prefix; no engine was built."

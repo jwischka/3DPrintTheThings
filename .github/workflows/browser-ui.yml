@@ -2,6 +2,13 @@ name: Android UI and simulator instrumentation
 
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'scripts/native/**'
+      - 'tools/parity/**'
+      - '.github/workflows/native-*.yml'
+      - '.github/workflows/parity*.yml'
   pull_request:
 
 permissions:
