@@ -2,6 +2,8 @@ package com.u1.slicer.slicing
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import android.os.Process
+import android.util.Log
 import com.u1.slicer.NativeLibrary
 import com.u1.slicer.bambu.BambuSanitizer
 import com.u1.slicer.bambu.ProfileEmbedder
@@ -16,6 +18,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /** Contract checks against the real experimental engine, with no printer connection. */
 @RunWith(AndroidJUnit4::class)
@@ -24,6 +29,7 @@ class NativeContractInstrumentedTest {
     private val assets = InstrumentationRegistry.getInstrumentation().context.assets
     private lateinit var dir: File
     private lateinit var native: NativeLibrary
+    private var sliceThreadRunning = false
 
     @Before fun setup() {
         assertTrue("Native engine is required", NativeLibrary.isLoaded)
@@ -32,8 +38,10 @@ class NativeContractInstrumentedTest {
     }
 
     @After fun cleanup() {
-        native.clearModel()
-        dir.deleteRecursively()
+        if (!sliceThreadRunning) {
+            native.clearModel()
+            dir.deleteRecursively()
+        }
     }
 
     private fun asset(name: String): File = File(dir, name).also { file ->
@@ -107,6 +115,7 @@ class NativeContractInstrumentedTest {
         }
         assertTrue("Processing callback must request cancellation", requested)
         assertTrue("In-flight slice must report cancellation", cancelled.cancelled && !cancelled.success)
+        assertTrue("Cancelled slice must not expose G-code", cancelled.gcodePath.isBlank())
         native.clearModel()
         val recovered = slice(input, SliceConfig())
         assertTrue("A later slice must produce model extrusion", !GcodeValidator.isEffectivelyEmpty(
@@ -114,12 +123,16 @@ class NativeContractInstrumentedTest {
         ))
     }
 
-    @Test fun cancellationAtExportTransitionAllowsNextSlice() {
+    @Test fun cancellationAtExportTransitionAllowsNextSlice() = cancelAtStageAndRecover("Generating G-code")
+
+    @Test fun cancellationAtResultReadingAllowsNextSlice() = cancelAtStageAndRecover("Reading results")
+
+    private fun cancelAtStageAndRecover(targetStage: String) {
         val input = asset("cube_10mm.stl")
         assertTrue("Model must load", native.loadModel(input.absolutePath))
         var requested = false
         native.progressListener = { _, stage ->
-            if (!requested && stage == "Generating G-code") {
+            if (!requested && stage == targetStage) {
                 requested = true
                 native.cancelSlice()
             }
@@ -129,8 +142,49 @@ class NativeContractInstrumentedTest {
         } finally {
             native.progressListener = null
         }
-        assertTrue("Export transition callback must request cancellation", requested)
-        assertTrue("Slice must report cancellation at export transition", cancelled.cancelled && !cancelled.success)
+        assertTrue("$targetStage callback must request cancellation", requested)
+        assertTrue("Slice must report cancellation at $targetStage", cancelled.cancelled && !cancelled.success)
+        assertTrue("Cancelled slice must not expose G-code", cancelled.gcodePath.isBlank())
+        native.clearModel()
+        val recovered = slice(input, SliceConfig())
+        assertTrue("A later slice must produce model extrusion", !GcodeValidator.isEffectivelyEmpty(
+            GcodeValidator.summarizeParsedOutput(GcodeParser.parse(recovered))
+        ))
+    }
+
+    @Test fun crossThreadCancellationDuringProcessingAllowsNextSlice() {
+        val input = asset("cube_10mm.stl")
+        assertTrue("Model must load", native.loadModel(input.absolutePath))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        native.progressListener = { percent, stage ->
+            if (percent in 15..89 && stage != "Starting slicing..." && entered.count > 0) {
+                entered.countDown()
+                check(release.await(30, TimeUnit.SECONDS)) { "Cancellation test was not released" }
+            }
+        }
+        sliceThreadRunning = true
+        val future = executor.submit<com.u1.slicer.data.SliceResult?> { native.slice(SliceConfig()) }
+        try {
+            assertTrue("Processing callback must be reached", entered.await(60, TimeUnit.SECONDS))
+            native.cancelSlice()
+            release.countDown()
+            val cancelled = future.get(90, TimeUnit.SECONDS) ?: throw AssertionError("Cancelled slice returned null")
+            assertTrue("Concurrent cancellation must be reported", cancelled.cancelled && !cancelled.success)
+            assertTrue("Cancelled slice must not expose G-code", cancelled.gcodePath.isBlank())
+        } finally {
+            release.countDown()
+            executor.shutdown()
+            val terminated = executor.awaitTermination(120, TimeUnit.SECONDS)
+            sliceThreadRunning = !terminated
+            if (!terminated) {
+                Log.e("NativeContractTest", "Native slice did not terminate; stopping instrumentation process")
+                Process.killProcess(Process.myPid())
+                throw AssertionError("Native slice did not terminate")
+            }
+            native.progressListener = null
+        }
         native.clearModel()
         val recovered = slice(input, SliceConfig())
         assertTrue("A later slice must produce model extrusion", !GcodeValidator.isEffectivelyEmpty(

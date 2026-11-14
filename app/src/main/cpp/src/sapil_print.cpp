@@ -6,6 +6,7 @@
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <mutex>
 
 // Slicer includes
 #include "libslic3r/Print.hpp"
@@ -30,17 +31,41 @@ namespace sapil {
 
 namespace sapil {
 
-// B55: pointer to the in-flight Print object so cancelSlice() can reach it.
-// Only non-null while slice() is running. Cleared on all exit paths.
-static std::atomic<Slic3r::Print*> g_active_print{nullptr};
+// Cancellation can race with completion or exception unwinding. The mutex
+// protects the pointed-to Print's lifetime, not just publication of its address.
+static std::mutex g_active_print_mutex;
+static Slic3r::Print* g_active_print = nullptr;
 // B55: independent cancel flag checked during config setup (before g_active_print is set).
 static std::atomic<bool> g_slice_cancel{false};
 
+namespace {
+// Native model/slice operations remain serialized by the caller. This scope
+// permits a concurrent cancel without holding a lock during work or callbacks.
+class ActivePrintScope {
+public:
+    explicit ActivePrintScope(Slic3r::Print& print) {
+        std::lock_guard<std::mutex> lock(g_active_print_mutex);
+        // A callback may have requested cancellation between processing phases.
+        if (g_slice_cancel.load(std::memory_order_acquire))
+            throw Slic3r::CanceledException();
+        g_active_print = &print;
+    }
+
+    ~ActivePrintScope() {
+        std::lock_guard<std::mutex> lock(g_active_print_mutex);
+        g_active_print = nullptr;
+    }
+
+    ActivePrintScope(const ActivePrintScope&) = delete;
+    ActivePrintScope& operator=(const ActivePrintScope&) = delete;
+};
+}
+
 void SlicerEngine::cancelSlice() {
     g_slice_cancel.store(true, std::memory_order_release);
-    auto* print = g_active_print.load(std::memory_order_acquire);
-    if (print) {
-        print->cancel();
+    std::lock_guard<std::mutex> lock(g_active_print_mutex);
+    if (g_active_print) {
+        g_active_print->cancel();
         SAPIL_LOGI("cancelSlice: signalled cancellation to Print + flag");
     } else {
         SAPIL_LOGI("cancelSlice: signalled cancel flag (print not yet started)");
@@ -1660,9 +1685,10 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // threads — these are not in the crash path and work correctly.
         // NOTE: Do NOT use tbb::task_arena(1) — it deadlocks because libtbb.so's
         // scheduler cannot schedule child tasks when the arena is limited to 1 thread.
-        g_active_print.store(&print, std::memory_order_release);
-        print.process();
-        g_active_print.store(nullptr, std::memory_order_release);
+        {
+            ActivePrintScope active(print);
+            print.process();
+        }
 
         // Checkpoint 2: validate wipe_tower_y after print.process()
         if (config.wipe_tower_enabled) {
@@ -1677,7 +1703,6 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
 
         // B55: check cancel flag before G-code export
         if (g_slice_cancel.load(std::memory_order_acquire)) {
-            g_active_print.store(nullptr, std::memory_order_release);
             throw Slic3r::CanceledException();
         }
         if (progress) progress(90, "Generating G-code");
@@ -1698,11 +1723,14 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         std::string output_path = getFilesDir() + "/output.gcode";
         // OrcaSlicer dereferences result without null check, so provide a real object
         Slic3r::GCodeProcessorResult gcode_result;
-        g_active_print.store(&print, std::memory_order_release);
-        print.export_gcode(output_path, &gcode_result, nullptr);
-        g_active_print.store(nullptr, std::memory_order_release);
+        {
+            ActivePrintScope active(print);
+            print.export_gcode(output_path, &gcode_result, nullptr);
+        }
 
         if (progress) progress(95, "Reading results");
+        if (g_slice_cancel.load(std::memory_order_acquire))
+            throw Slic3r::CanceledException();
 
         // Read the G-code for preview
         std::ifstream gcode_file(output_path);
@@ -1715,8 +1743,6 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
 
         // Extract print statistics
         const Slic3r::PrintStatistics& stats = print.print_statistics();
-        result.success = true;
-        result.gcode_path = output_path;
         
         // Count layers across objects
         int max_layers = 0;
@@ -1759,18 +1785,22 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         result.estimated_filament_grams = stats.total_weight > 0 ?
             (float)stats.total_weight : result.estimated_filament_mm * 0.003f;
 
+        // Publish a usable result only after the final cancellation checkpoint.
+        // A request made by the Complete callback is after this boundary.
+        if (g_slice_cancel.load(std::memory_order_acquire))
+            throw Slic3r::CanceledException();
+        result.success = true;
+        result.gcode_path = output_path;
         if (progress) progress(100, "Complete");
 
         return result;
 
     } catch (const Slic3r::CanceledException&) {
-        g_active_print.store(nullptr, std::memory_order_release);
         result.success = false;
         result.cancelled = true;
         result.error_message = "Cancelled by user";
         SAPIL_LOGI("Slicing cancelled by user");
     } catch (const Slic3r::SlicingErrors& e) {
-        g_active_print.store(nullptr, std::memory_order_release);
         result.success = false;
         std::string msg = "Slicing errors:";
         for (const auto& err : e.errors_) {
@@ -1785,7 +1815,6 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
                 jsonEscape(msg) + "\"}"
         );
     } catch (const Slic3r::SlicingError& e) {
-        g_active_print.store(nullptr, std::memory_order_release);
         result.success = false;
         result.error_message = std::string("Slicing error: ") + e.what();
         SAPIL_LOGE("Slicing error: %s", e.what());
@@ -1795,7 +1824,6 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
                 jsonEscape(e.what()) + "\"}"
         );
     } catch (const std::exception& e) {
-        g_active_print.store(nullptr, std::memory_order_release);
         result.success = false;
         result.error_message = std::string("Error: ") + e.what();
         SAPIL_LOGE("Error during slicing: %s", e.what());
