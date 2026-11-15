@@ -155,6 +155,23 @@ class GcodeRenderer(private val context: Context) : GLSurfaceView.Renderer {
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        // GLSurfaceView calls this again after EGL context loss. Java-side IDs survive,
+        // but every object they named in the old context is gone.
+        val previous = lastGcode
+        val restorePrevious = previous != null && pendingGcode == null
+        val savedMinLayer = minLayer
+        val savedMaxLayer = maxLayer
+        segmentShader = null
+        toolpathShader = null
+        templateVAO = 0; templateVBO = 0
+        positionTexId = 0; hwaTexId = 0; activeColorTexId = 0
+        extruderColorTexId = 0; featureColorTexId = 0; segmentIndexTexId = 0
+        travelVAO = 0; travelVBO = 0
+        segmentLayerRanges = emptyList()
+        travelLayerRanges.clear()
+        hasSegments = false
+        lastPackResult = null
+
         GLES30.glClearColor(0.059f, 0.059f, 0.118f, 1f)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_BLEND)
@@ -171,13 +188,21 @@ class GcodeRenderer(private val context: Context) : GLSurfaceView.Renderer {
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, buf, 0)
         if (buf[0] > 0) maxTexSize = buf[0]
 
-        if (preserveRestoredCameraOnSurfaceInit) {
+        if (preserveRestoredCameraOnSurfaceInit || restorePrevious) {
             preserveRestoredCameraOnSurfaceInit = false
         } else {
             camera.setTarget(135.0, 135.0, 0.0)
             camera.distance = 500.0
             camera.elevation = 62.0
             camera.azimuth = -90.0
+        }
+        if (restorePrevious) {
+            // Restore on this GL thread before the first draw. A newer UI G-code
+            // remains in pendingGcode and will replace this on the next frame.
+            uploadGcode(previous!!)
+            minLayer = savedMinLayer
+            maxLayer = savedMaxLayer
+            pendingContentReadyDispatch = true
         }
     }
 

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.Log
+import android.view.View
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -37,6 +38,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Actual MainActivity navigation and upload-only UI on a disposable simulator emulator. */
@@ -48,11 +50,29 @@ class MainActivityWorkflowInstrumentedTest {
     private val printerId = "simulator-ui-workflow"
     private val fixtureHash = "3bc24cffc43194b17e30507fc6fb06fb6c39bf239087f5c960c1dc9d9dd96e1a"
     private val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
+    private lateinit var decorView: View
     private fun stage(name: String) { Log.i("WorkflowE2E", name) }
 
     private fun capture(name: String, directory: File) {
         compose.waitForIdle()
-        val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        if (Build.VERSION.SDK_INT >= 29) {
+            val committed = CountDownLatch(1)
+            val callback = Runnable { committed.countDown() }
+            instrumentation.runOnMainSync {
+                decorView.viewTreeObserver.registerFrameCommitCallback(callback)
+                decorView.postInvalidateOnAnimation()
+            }
+            try {
+                assertTrue("No committed window frame before $name", committed.await(5, TimeUnit.SECONDS))
+            } finally {
+                instrumentation.runOnMainSync {
+                    val observer = decorView.viewTreeObserver
+                    if (observer.isAlive) observer.unregisterFrameCommitCallback(callback)
+                }
+            }
+        }
+        val bitmap = instrumentation.uiAutomation.takeScreenshot()
             ?: throw AssertionError("Could not capture $name")
         try {
             assertTrue("Unexpected screenshot dimensions", bitmap.width in 1..4096 && bitmap.height in 1..4096)
@@ -132,6 +152,7 @@ class MainActivityWorkflowInstrumentedTest {
             var slicer: SlicerViewModel? = null
             var printer: PrinterViewModel? = null
             scenario.onActivity { activity ->
+                decorView = activity.window.decorView
                 slicer = ViewModelProvider(activity)[SlicerViewModel::class.java]
                 printer = ViewModelProvider(activity)[PrinterViewModel::class.java]
             }
@@ -153,6 +174,11 @@ class MainActivityWorkflowInstrumentedTest {
             assertEquals("cube_10mm.stl", slicerVm.modelFileName.value)
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Slice Model").fetchSemanticsNodes().isNotEmpty()
+            }
+            // ModelRenderer posts onContentReady only after the mesh has been
+            // uploaded and drawn. The overlay leaves the semantics tree then.
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText("Preparing preview…").fetchSemanticsNodes().isEmpty()
             }
             capture("prepare.png", captureDir)
             compose.onNodeWithText("Slice Model").performClick()
@@ -189,6 +215,11 @@ class MainActivityWorkflowInstrumentedTest {
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Upload Only").fetchSemanticsNodes().isNotEmpty() &&
                     printerVm.status.value.isConnected
+            }
+            // GcodeRenderer's content-ready callback follows its first GL draw;
+            // wait for that frame rather than capturing the loading overlay.
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText("Preparing preview…").fetchSemanticsNodes().isEmpty()
             }
             capture("preview.png", captureDir)
             assertOnlySimulator(currentConfig(repository), printerVm)
