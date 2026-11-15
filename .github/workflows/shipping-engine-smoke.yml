@@ -1,0 +1,97 @@
+name: Shipping ARM64 engine emulator smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64-shipping-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Create ephemeral debug signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android \
+              -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname 'CN=Android Debug,O=Android,C=US'
+          fi
+
+      - name: Stage cube fixture and initialize report folder
+        run: |
+          mkdir -p app/src/androidTest/assets shipping-smoke-report
+          cp tools/parity/fixtures/cube_10mm.stl app/src/androidTest/assets/cube_10mm.stl
+
+      - name: Build unmodified shipping ARM64 app and test APKs
+        run: >-
+          ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --no-build-cache --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" -Pkotlin.daemon.jvmargs=-Xmx3g
+
+      - name: Enable KVM on the ephemeral runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Release compiler memory before the emulator
+        run: |
+          jps -l | awk '$2 == "org.jetbrains.kotlin.daemon.KotlinCompileDaemon" {print $1}' | xargs -r kill
+          free -m > shipping-smoke-report/host-memory-before.txt
+
+      - name: Start simulator for workflow parity with native smoke
+        run: |
+          python3 tools/simulator/u1_simulator.py --host 0.0.0.0 --allow-remote > "$RUNNER_TEMP/u1-simulator.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/u1-simulator.pid"
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18725/__sim/info; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/u1-simulator.log"
+          exit 1
+
+      - name: Test original ARM64 APK with Google APIs native bridge
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            python3 scripts/native/run-shipping-instrumentation.py --app app/build/outputs/apk/debug/app-debug.apk --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk --report-dir shipping-smoke-report/device --timeout 900
+            python3 scripts/native/export-parity-capture.py --output shipping-smoke-report/cube
+            python3 tools/parity/parity.py inspect shipping-smoke-report/cube/cube_10mm.android.gcode > shipping-smoke-report/cube/metrics.json
+
+      - name: Stop simulator and retain its log
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/u1-simulator.log" ]; then cp "$RUNNER_TEMP/u1-simulator.log" shipping-smoke-report/; fi
+          if [ -f "$RUNNER_TEMP/u1-simulator.pid" ]; then kill "$(cat "$RUNNER_TEMP/u1-simulator.pid")" || true; fi
+          free -m > shipping-smoke-report/host-memory-after.txt
+          sudo dmesg -T | tail -150 > shipping-smoke-report/host-kernel-tail.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shipping-arm64-engine-smoke-attempt-${{ github.run_attempt }}
+          path: shipping-smoke-report/
+          if-no-files-found: warn
