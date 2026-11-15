@@ -1,15 +1,49 @@
 #!/usr/bin/env python3
 """Install UI-only APKs and run the isolated UI instrumentation classes."""
 import argparse
+from collections import deque
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
 TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest,com.u1.slicer.ui.LiveSpoolMappingInstrumentedTest,com.u1.slicer.library.LibraryScreenInstrumentedTest,com.u1.slicer.network.SimulatedU1InstrumentedTest,com.u1.slicer.LongOpServiceInstrumentedTest"
 EXPECTED_TESTS = None
 RUNNER = "io.github.jwischka.threedprintthethings.test/androidx.test.runner.AndroidJUnitRunner"
+
+
+class LiveLogcat:
+    """Keep a bounded host-side tail even when the emulator disappears."""
+    def __init__(self, adb: str, path: Path):
+        self.adb, self.path = adb, path
+        self.lines = deque(maxlen=2000)
+
+    def __enter__(self):
+        self.process = subprocess.Popen(
+            [self.adb, "logcat", "-v", "threadtime", "-s", "AndroidRuntime:E", "libc:F",
+             "DEBUG:F", "ActivityManager:I", "lmkd:I", "SlicerVM:I", "WorkflowE2E:I", "SAPIL:I"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        def collect():
+            while line := self.process.stdout.readline(4096):
+                self.lines.append(line)
+        self.thread = threading.Thread(target=collect, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+        self.thread.join(timeout=5)
+        self.path.write_bytes(b"".join(self.lines.copy())[-2 * 1024 * 1024:])
+        if not self.thread.is_alive():
+            self.process.stdout.close()
 
 
 def passed(output: str, returncode: int, expected_tests: int | None = None) -> bool:
@@ -60,6 +94,7 @@ def main() -> int:
                 log.write("\nCommand timed out\n")
                 raise
             log.write(result.stdout)
+            log.write(f"\nexit={result.returncode}\n")
             log.flush()
             return result
 
@@ -68,11 +103,12 @@ def main() -> int:
                 result = run([args.adb, "install", "-r", str(apk)], 120)
                 if result.returncode != 0 or "Success" not in result.stdout:
                     return 1
-            result = run([args.adb, "shell", "am", "instrument", "-w", "-r", "-e", "class", TEST_CLASS, RUNNER], args.timeout)
-            if not passed(result.stdout, result.returncode, args.expected_tests):
-                log.write("Instrumentation failed or its completed test counts did not match.\n")
-                capture_logcat()
-                return 1
+            with LiveLogcat(args.adb, args.log.with_name(args.log.stem + "-live-logcat.log")):
+                result = run([args.adb, "shell", "am", "instrument", "-w", "-r", "-e", "class", TEST_CLASS, RUNNER], args.timeout)
+                if not passed(result.stdout, result.returncode, args.expected_tests):
+                    log.write("Instrumentation failed or its completed test counts did not match.\n")
+                    capture_logcat()
+                    return 1
             return 0
         except (OSError, subprocess.TimeoutExpired) as exc:
             log.write(f"Unable to complete browser instrumentation: {exc}\n")

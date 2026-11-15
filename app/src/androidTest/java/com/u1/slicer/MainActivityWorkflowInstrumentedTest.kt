@@ -3,6 +3,7 @@ package com.u1.slicer
 import android.Manifest
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -45,6 +46,7 @@ class MainActivityWorkflowInstrumentedTest {
     private val printerId = "simulator-ui-workflow"
     private val fixtureHash = "3bc24cffc43194b17e30507fc6fb06fb6c39bf239087f5c960c1dc9d9dd96e1a"
     private val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
+    private fun stage(name: String) { Log.i("WorkflowE2E", name) }
 
     private fun control(path: String, reset: Boolean = false): JSONObject {
         val request = Request.Builder().url("$base/__sim/$path")
@@ -62,6 +64,7 @@ class MainActivityWorkflowInstrumentedTest {
 
     @Test fun libraryOpenPrepareSlicePreviewAndUploadOnly() {
         assertSimulatorMarker() // No configuration, download or upload before this check.
+        stage("simulator-marker-verified")
         assertTrue("Real native engine is required", NativeLibrary.isLoaded)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -74,6 +77,7 @@ class MainActivityWorkflowInstrumentedTest {
         val previous = runBlocking {
             withTimeout(15_000) { repository.config.filterNotNull().first() }
         }
+        stage("printer-migration-observed")
         assertTrue("Disposable emulator must not contain a real printer",
             previous.printers.all { it.moonrakerUrl.isBlank() || it.moonrakerUrl == base })
         control("reset", reset = true)
@@ -96,11 +100,13 @@ class MainActivityWorkflowInstrumentedTest {
             entryHash = entry.sha256
             assertEquals(fixtureHash, entry.sha256)
             assertEquals(entry, runBlocking { container.downloadStore.entry(entry.sha256) })
+            stage("download-persisted")
 
             if (Build.VERSION.SDK_INT >= 33) {
                 instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
             }
             scenario = ActivityScenario.launch(MainActivity::class.java)
+            stage("activity-launched")
             var slicer: SlicerViewModel? = null
             var printer: PrinterViewModel? = null
             scenario.onActivity { activity ->
@@ -117,14 +123,17 @@ class MainActivityWorkflowInstrumentedTest {
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("UI workflow cube").fetchSemanticsNodes().isNotEmpty()
             }
+            stage("library-visible")
             compose.onNodeWithText("Open").performClick()
             compose.waitUntil(60_000) { slicerVm.state.value is SlicerViewModel.SlicerState.ModelLoaded }
+            stage("model-loaded")
             assertEquals("cube_10mm.stl", slicerVm.modelFileName.value)
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Slice Model").fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNodeWithText("Slice Model").performClick()
             compose.waitUntil(180_000) { slicerVm.state.value is SlicerViewModel.SlicerState.SliceComplete }
+            stage("slice-complete")
             val sliced = slicerVm.state.value as SlicerViewModel.SlicerState.SliceComplete
             val source = File(sliced.result.gcodePath)
             assertTrue("UI slice produced no G-code", source.isFile && source.length() > 0)
@@ -145,8 +154,10 @@ class MainActivityWorkflowInstrumentedTest {
             }
             assertEquals(0, control("state").getJSONArray("events").length())
             assertOnlySimulator(currentConfig(repository), printerVm)
+            stage("upload-dialog-confirmed-simulator")
             compose.onNodeWithText("Upload").performClick()
             compose.waitUntil(60_000) { printerVm.sendingState.value == PrinterViewModel.SendingState.UploadComplete }
+            stage("upload-complete")
 
             val remapped = File(source.parentFile, "${source.nameWithoutExtension}.remapped.${source.extension}")
             assertTrue("UI did not stage remapped G-code", remapped.isFile && remapped.length() > 0)
