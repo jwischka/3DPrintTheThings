@@ -2,6 +2,13 @@ name: Shipping ARM64 engine emulator smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - wp/no-phone-validation
+    paths:
+      - .github/workflows/shipping-engine-smoke.yml
+      - scripts/native/run-shipping-instrumentation.py
+      - scripts/native/tests/test_shipping_instrumentation.py
 
 permissions:
   contents: read
