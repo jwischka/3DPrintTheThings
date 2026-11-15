@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a disposable x86_64 APK containing a verified experimental engine."""
+"""Create a disposable APK containing a verified experimental engine."""
 import argparse
 import re
 import subprocess
@@ -12,10 +12,25 @@ def signature(name: str) -> bool:
     return bool(re.fullmatch(r"META-INF/(?:MANIFEST\.MF|[^/]+\.(?:SF|RSA|DSA|EC))", name, re.IGNORECASE))
 
 
+def verify_library(path: Path, abi: str) -> None:
+    """Reject missing, malformed, or wrong-architecture 64-bit ELF inputs."""
+    try:
+        with path.open("rb") as source:
+            header = source.read(20)
+    except OSError as exc:
+        raise ValueError(f"Cannot read native library: {path.name}") from exc
+    if len(header) < 20 or header[:6] != b"\x7fELF\x02\x01":
+        raise ValueError(f"Native library is not a little-endian 64-bit ELF: {path.name}")
+    expected = {"x86_64": 62, "arm64-v8a": 183}[abi]
+    if int.from_bytes(header[18:20], "little") != expected:
+        raise ValueError(f"Native library architecture does not match {abi}: {path.name}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--engine-dir", type=Path, required=True)
+    parser.add_argument("--abi", choices=("x86_64", "arm64-v8a"), default="x86_64")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--keystore", type=Path, required=True)
     parser.add_argument("--zipalign", required=True)
@@ -24,8 +39,11 @@ def main() -> None:
     if args.input.resolve() == args.output.resolve() or args.output.exists():
         parser.error("output must be a new file separate from the original APK")
     libraries = [args.engine_dir / "libprusaslicer-jni.so", args.engine_dir / "libc++_shared.so"]
-    if any(not path.is_file() for path in libraries):
-        parser.error("verified experimental engine and libc++_shared are required")
+    try:
+        for library in libraries:
+            verify_library(library, args.abi)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="native-apk-", dir=args.output.parent) as directory:
         unsigned = Path(directory) / "unsigned.apk"
@@ -38,7 +56,7 @@ def main() -> None:
                     while chunk := src.read(1024 * 1024):
                         dst.write(chunk)
             for library in libraries:
-                out.write(library, "lib/x86_64/" + library.name, compress_type=zipfile.ZIP_STORED)
+                out.write(library, f"lib/{args.abi}/{library.name}", compress_type=zipfile.ZIP_STORED)
         subprocess.run([args.zipalign, "-p", "-f", "4", str(unsigned), str(aligned)], check=True)
         subprocess.run([args.apksigner, "sign", "--ks", str(args.keystore), "--ks-key-alias", "androiddebugkey",
                         "--ks-pass", "pass:android", "--key-pass", "pass:android", "--out", str(args.output),

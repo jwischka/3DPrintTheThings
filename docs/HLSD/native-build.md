@@ -45,10 +45,13 @@ It records hashes of the engine and the NDK `libc++_shared.so`. The latter's
 LOAD alignment is reported separately, so this workflow does not establish
 runtime compatibility with a 16 KiB page-size device.
 
-The x86 smoke job uses only the x86 engine artifact. It builds ordinary debug
-and test APKs, creates a disposable app APK containing the experimental x86 JNI
+Each smoke job uses the engine artifact for its selected ABI. It builds ordinary debug
+and test APKs, creates a disposable app APK containing that experimental JNI
 library and NDK C++ runtime, and signs that APK and an isolated test APK with
-the same ephemeral debug key. On a Linux x86_64 emulator, it exercises STL and
+the same ephemeral debug key. Packaging checks both libraries' ELF architecture
+and preserves the original APK hash. PackageManager's selected ABI is checked
+after installation. Linux x86_64 emulators run the x86 engine directly and the
+ARM64 engine through Android's native bridge. Both variants exercise STL and
 dual-color 3MF slicing, temperature commands, relative retraction, tool remapping,
 bed bounds, cancellation and recovery, and a 10 mm cube capture through the real
 JNI bridge. The runner requires matching selected, started, and successful test

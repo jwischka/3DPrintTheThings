@@ -12,7 +12,7 @@ Use JDK 17 and Android SDK 34. Set `local.properties` for the local SDK; do not 
 ./gradlew testDebugUnitTest --tests 'com.u1.slicer.SomeTest'
 ```
 
-Run the relevant unit tests before each commit. Run at most two Gradle builds at once. Experimental native slicing smoke tests may run on a Linux x86_64 emulator with a disposable APK containing the x86 engine. Isolated UI-only instrumentation with no JNI calls uses a separate test APK that omits native libraries; never use that APK for slicing, printing, or distribution. Real hardware acceptance and printer control are owner-run. Never start a real print; use upload-only flows for send testing.
+Run the relevant unit tests before each commit. Run at most two Gradle builds at once. Experimental native slicing smoke tests may run on a Linux x86_64 emulator with a disposable APK containing the selected x86_64 or ARM64 engine; ARM64 uses Android's native bridge. Isolated UI-only instrumentation with no JNI calls uses a separate test APK that omits native libraries; never use that APK for slicing, printing, or distribution. Real hardware acceptance and printer control are owner-run. Never start a real print; use upload-only flows for send testing.
 
 ## Boundaries and safety
 

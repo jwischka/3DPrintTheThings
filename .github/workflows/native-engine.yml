@@ -22,6 +22,7 @@ on:
       - 'scripts/native/extra-sources.lock'
       - 'scripts/native/build-extra-deps.sh'
       - 'app/src/main/cpp/**'
+      - 'app/src/main/java/com/u1/slicer/viewer/**'
 
 permissions:
   contents: read
@@ -104,10 +105,14 @@ jobs:
           name: experimental-native-engine-${{ matrix.abi }}
           path: ${{ runner.temp }}/native-engine/output/
 
-  x86-slice-smoke:
+  slice-smoke:
     needs: engine
-    # An arm64 compile failure must not suppress a successfully built x86 smoke test.
+    # A failed ABI build must not suppress testing a successfully built ABI.
     if: ${{ always() && !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [x86_64, arm64-v8a]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -124,8 +129,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/download-artifact@v4
         with:
-          name: experimental-native-engine-x86_64
-          path: ${{ runner.temp }}/native-engine-x86
+          name: experimental-native-engine-${{ matrix.abi }}
+          path: ${{ runner.temp }}/native-engine-tested
       - name: Create ephemeral debug signing key
         run: |
           mkdir -p "$HOME/.android"
@@ -143,21 +148,23 @@ jobs:
         run: >-
           ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --no-build-cache --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" -Pkotlin.daemon.jvmargs=-Xmx3g
-      - name: Prepare isolated x86_64 test APKs
+      - name: Prepare isolated test APKs
         run: |
           mkdir -p "$RUNNER_TEMP/native-test"
           signer="$ANDROID_HOME/build-tools/34.0.0/apksigner"
           align="$ANDROID_HOME/build-tools/34.0.0/zipalign"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/native-test/original-apk-sha256.txt"
           python3 scripts/native/prepare-emulator-apk.py \
             --input app/build/outputs/apk/debug/app-debug.apk \
-            --engine-dir "$RUNNER_TEMP/native-engine-x86" --output "$RUNNER_TEMP/native-test/app-x86.apk" \
+            --abi '${{ matrix.abi }}' --engine-dir "$RUNNER_TEMP/native-engine-tested" --output "$RUNNER_TEMP/native-test/app-engine.apk" \
             --keystore "$HOME/.android/debug.keystore" --zipalign "$align" --apksigner "$signer"
           python3 tools/prepare-ui-test-apk.py \
             --input app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            --output "$RUNNER_TEMP/native-test/test-x86.apk" \
+            --output "$RUNNER_TEMP/native-test/test-engine.apk" \
             --keystore "$HOME/.android/debug.keystore" --zipalign "$align" --apksigner "$signer"
-          app_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/app-x86.apk" | grep 'Signer #1 certificate SHA-256 digest:')
-          test_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/test-x86.apk" | grep 'Signer #1 certificate SHA-256 digest:')
+          sha256sum -c "$RUNNER_TEMP/native-test/original-apk-sha256.txt"
+          app_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/app-engine.apk" | grep 'Signer #1 certificate SHA-256 digest:')
+          test_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/test-engine.apk" | grep 'Signer #1 certificate SHA-256 digest:')
           test -n "$app_cert" && test "$app_cert" = "$test_cert"
       - name: Enable KVM on the ephemeral runner
         run: |
@@ -189,14 +196,18 @@ jobs:
           emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            python3 scripts/native/run-native-instrumentation.py --suite core --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/instrumentation.log --timeout 900
+            python3 scripts/native/run-native-instrumentation.py --suite core --app "$RUNNER_TEMP/native-test/app-engine.apk" --test "$RUNNER_TEMP/native-test/test-engine.apk" --log native-slice-report/instrumentation.log --timeout 900
             python3 scripts/native/export-parity-capture.py --output native-slice-report/cube
             python3 tools/parity/parity.py inspect native-slice-report/cube/cube_10mm.android.gcode > native-slice-report/cube/metrics.json
-            cp "$RUNNER_TEMP/native-engine-x86/sha256.txt" native-slice-report/engine-sha256.txt
+            cp "$RUNNER_TEMP/native-engine-tested/sha256.txt" native-slice-report/engine-sha256.txt
+            cp "$RUNNER_TEMP/native-test/original-apk-sha256.txt" native-slice-report/
+            adb shell dumpsys package io.github.jwischka.threedprintthethings > native-slice-report/package-abi.txt
+            grep -F 'primaryCpuAbi=${{ matrix.abi }}' native-slice-report/package-abi.txt
+            adb shell getprop ro.dalvik.vm.native.bridge > native-slice-report/native-bridge.txt
             adb shell am force-stop io.github.jwischka.threedprintthethings
-            python3 scripts/native/run-native-instrumentation.py --suite geometry --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/geometry-instrumentation.log --timeout 600
+            python3 scripts/native/run-native-instrumentation.py --suite geometry --app "$RUNNER_TEMP/native-test/app-engine.apk" --test "$RUNNER_TEMP/native-test/test-engine.apk" --log native-slice-report/geometry-instrumentation.log --timeout 600
             adb shell am force-stop io.github.jwischka.threedprintthethings
-            python3 scripts/native/run-native-instrumentation.py --suite ui --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/main-ui-instrumentation.log --timeout 600
+            python3 scripts/native/run-native-instrumentation.py --suite ui --app "$RUNNER_TEMP/native-test/app-engine.apk" --test "$RUNNER_TEMP/native-test/test-engine.apk" --log native-slice-report/main-ui-instrumentation.log --timeout 600
             mkdir -p native-slice-report/screenshots
             for name in library prepare preview upload; do adb exec-out run-as io.github.jwischka.threedprintthethings cat "files/workflow-capture/$name.png" > "native-slice-report/screenshots/$name.png" || exit 1; done
             sha256sum native-slice-report/screenshots/*.png > native-slice-report/screenshots/sha256.txt
@@ -212,6 +223,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: experimental-native-slice-smoke-log-attempt-${{ github.run_attempt }}
+          name: experimental-native-${{ matrix.abi }}-slice-smoke-log-attempt-${{ github.run_attempt }}
           path: native-slice-report/
           if-no-files-found: warn
