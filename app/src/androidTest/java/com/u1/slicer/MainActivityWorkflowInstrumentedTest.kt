@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -23,6 +24,7 @@ import com.u1.slicer.gcode.GcodeParser
 import com.u1.slicer.gcode.GcodeValidator
 import com.u1.slicer.library.DownloadProvenance
 import com.u1.slicer.printer.PrinterViewModel
+import com.u1.slicer.viewer.ModelViewerView
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -52,6 +54,32 @@ class MainActivityWorkflowInstrumentedTest {
     private val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
     private lateinit var decorView: View
     private fun stage(name: String) { Log.i("WorkflowE2E", name) }
+
+    private fun prepareViewer(root: View): ModelViewerView? {
+        if (root is ModelViewerView) return root
+        if (root is ViewGroup) {
+            for (index in 0 until root.childCount) {
+                prepareViewer(root.getChildAt(index))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun waitForPrepareMesh() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        compose.waitUntil(30_000) {
+            var viewer: ModelViewerView? = null
+            instrumentation.runOnMainSync { viewer = prepareViewer(decorView) }
+            val current = viewer ?: return@waitUntil false
+            val checked = CountDownLatch(1)
+            var hasMesh = false
+            current.queueEvent {
+                hasMesh = (current.renderer.meshData?.vertexCount ?: 0) > 0
+                checked.countDown()
+            }
+            checked.await(1, TimeUnit.SECONDS) && hasMesh
+        }
+    }
 
     private fun capture(name: String, directory: File) {
         compose.waitForIdle()
@@ -175,8 +203,9 @@ class MainActivityWorkflowInstrumentedTest {
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Slice Model").fetchSemanticsNodes().isNotEmpty()
             }
-            // ModelRenderer posts onContentReady only after the mesh has been
-            // uploaded and drawn. The overlay leaves the semantics tree then.
+            // The overlay can clear before the native scene reaches GL. Check
+            // the actual ModelRenderer on its own thread before capturing.
+            waitForPrepareMesh()
             compose.waitUntil(30_000) {
                 compose.onAllNodesWithText("Preparing preview…").fetchSemanticsNodes().isEmpty()
             }

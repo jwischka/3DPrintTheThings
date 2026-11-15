@@ -129,7 +129,8 @@ class GcodeRendererContextInstrumentedTest {
 
         override fun close() {
             releaseContext()
-            EGL14.eglTerminate(display)
+            // EGL_DEFAULT_DISPLAY is shared with Android's UI renderer in this
+            // instrumentation process. Only release resources owned by this test.
         }
     }
 }
