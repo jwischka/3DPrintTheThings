@@ -69,3 +69,22 @@ the debug Library entry point and drives Prepare, Slice, Preview and Upload Only
 it checks the staged, remapped output against the accepted upload. Tests verify
 the fixed simulator marker and endpoint before mutations and never send printer
 commands to a configurable external destination.
+The completed workflow retains Library, Prepare, Preview and upload confirmation
+screenshots from the actual app, with hashes alongside the test results.
+
+Separate app processes exercise the core native cases, geometry regressions,
+and full MainActivity workflow. Geometry cases cover preview rotation, repeated
+rotation stability, placement, scaling, triangle batches and scene-handle release.
+Every session requires every selected test to pass. A bounded host-side
+logcat tail survives emulator loss, while host memory and kernel diagnostics
+help distinguish Android assertions from runner failures.
+
+The shipping-engine probe installs the original ARM64 app and instrumentation
+APKs on a Google APIs x86_64 emulator with native-bridge support. It verifies
+the packaged libraries against the checked-in ARM64 hashes, requires
+PackageManager to select `arm64-v8a`, and captures a real cube slice plus runtime
+ABI provenance. APK hashes must remain unchanged. A separate process drives the
+same full MainActivity workflow with those original APKs. This exercises the inherited
+engine under translation; it does not establish physical ARM64 performance or
+device compatibility. The probe runs manually or when its own workflow or
+runner changes on the development branch.

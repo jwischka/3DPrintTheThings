@@ -2,6 +2,7 @@ package com.u1.slicer
 
 import android.Manifest
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Build
 import android.util.Log
 import androidx.compose.ui.test.assertIsEnabled
@@ -34,6 +35,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
@@ -47,6 +49,20 @@ class MainActivityWorkflowInstrumentedTest {
     private val fixtureHash = "3bc24cffc43194b17e30507fc6fb06fb6c39bf239087f5c960c1dc9d9dd96e1a"
     private val http = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
     private fun stage(name: String) { Log.i("WorkflowE2E", name) }
+
+    private fun capture(name: String, directory: File) {
+        compose.waitForIdle()
+        val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+            ?: throw AssertionError("Could not capture $name")
+        try {
+            assertTrue("Unexpected screenshot dimensions", bitmap.width in 1..4096 && bitmap.height in 1..4096)
+            val output = File(directory, name)
+            FileOutputStream(output).use { stream ->
+                assertTrue("PNG compression failed for $name", bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream))
+            }
+            assertTrue("Screenshot is empty: $name", output.isFile && output.length() > 0)
+        } finally { bitmap.recycle() }
+    }
 
     private fun control(path: String, reset: Boolean = false): JSONObject {
         val request = Request.Builder().url("$base/__sim/$path")
@@ -68,6 +84,12 @@ class MainActivityWorkflowInstrumentedTest {
         assertTrue("Real native engine is required", NativeLibrary.isLoaded)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        val captureDir = File(context.filesDir, "workflow-capture")
+        assertTrue("Cannot create workflow capture directory", captureDir.isDirectory || captureDir.mkdirs())
+        for (name in listOf("library.png", "prepare.png", "preview.png", "upload.png")) {
+            val old = File(captureDir, name)
+            assertTrue("Cannot clear stale screenshot $name", !old.exists() || old.delete())
+        }
         val container = (context.applicationContext as U1SlicerApplication).container
         val repository = container.printersRepository
         val configured = Printer(printerId, "Simulator", moonrakerUrl = base)
@@ -124,6 +146,7 @@ class MainActivityWorkflowInstrumentedTest {
                 compose.onAllNodesWithText("UI workflow cube").fetchSemanticsNodes().isNotEmpty()
             }
             stage("library-visible")
+            capture("library.png", captureDir)
             compose.onNodeWithText("Open").performClick()
             compose.waitUntil(60_000) { slicerVm.state.value is SlicerViewModel.SlicerState.ModelLoaded }
             stage("model-loaded")
@@ -131,6 +154,7 @@ class MainActivityWorkflowInstrumentedTest {
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Slice Model").fetchSemanticsNodes().isNotEmpty()
             }
+            capture("prepare.png", captureDir)
             compose.onNodeWithText("Slice Model").performClick()
             compose.waitUntil(180_000) { slicerVm.state.value is SlicerViewModel.SlicerState.SliceComplete }
             stage("slice-complete")
@@ -142,11 +166,13 @@ class MainActivityWorkflowInstrumentedTest {
             val markers = source.useLines { lines -> lines.count { it.trim() == ";LAYER_CHANGE" } }
             assertTrue("UI slice has no layer markers", markers > 0)
             assertEquals(markers, summary.layerCount)
+            stage("gcode-parsed")
 
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Upload Only").fetchSemanticsNodes().isNotEmpty() &&
                     printerVm.status.value.isConnected
             }
+            capture("preview.png", captureDir)
             assertOnlySimulator(currentConfig(repository), printerVm)
             compose.onNodeWithText("Upload Only").assertIsEnabled().performClick()
             compose.waitUntil(20_000) {
@@ -158,6 +184,10 @@ class MainActivityWorkflowInstrumentedTest {
             compose.onNodeWithText("Upload").performClick()
             compose.waitUntil(60_000) { printerVm.sendingState.value == PrinterViewModel.SendingState.UploadComplete }
             stage("upload-complete")
+            compose.waitUntil(20_000) {
+                compose.onAllNodesWithText("Uploaded successfully!").fetchSemanticsNodes().isNotEmpty()
+            }
+            capture("upload.png", captureDir)
 
             val remapped = File(source.parentFile, "${source.nameWithoutExtension}.remapped.${source.extension}")
             assertTrue("UI did not stage remapped G-code", remapped.isFile && remapped.length() > 0)

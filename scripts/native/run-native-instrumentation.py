@@ -28,10 +28,19 @@ CORE_TESTS = (
     "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#truncatedFixtureCleansPartialAndNormalRetryPersists"
 )
 UI_TEST = "com.u1.slicer.MainActivityWorkflowInstrumentedTest#libraryOpenPrepareSlicePreviewAndUploadOnly"
+GEOMETRY_TESTS = (
+    "com.u1.slicer.slicing.SlicingIntegrationTest#setModelRotation_invalidatesPreviewMesh_soSubsequentFetchReturnsRotatedGeometry,"
+    "com.u1.slicer.slicing.SlicingIntegrationTest#setModelRotation_sameValueSkips_cacheNotInvalidated,"
+    "com.u1.slicer.slicing.SlicingIntegrationTest#f77_twoStls_placeAndSlice_gcodeWithinBedBounds,"
+    "com.u1.slicer.slicing.SlicingIntegrationTest#f83_mmScalePath_producesExpectedSlicedHeight,"
+    "com.u1.slicer.viewer.NativePreparePreviewTest#getPreparePreviewMesh_reportsBatchTriangleCountsThatSumToThePreviewMesh,"
+    "com.u1.slicer.viewer.NativePreparePreviewTest#preparePreviewScene_duplicateReleaseIsRejected"
+)
 selection = argparse.ArgumentParser(add_help=False)
-selection.add_argument("--suite", choices=("core", "ui", "all"), default="all")
+selection.add_argument("--suite", choices=("core", "geometry", "ui", "all"), default="all")
 options, remaining = selection.parse_known_args()
-runner.TEST_CLASS = {"core": CORE_TESTS, "ui": UI_TEST, "all": CORE_TESTS + "," + UI_TEST}[options.suite]
+runner.TEST_CLASS = {"core": CORE_TESTS, "geometry": GEOMETRY_TESTS, "ui": UI_TEST,
+                     "all": CORE_TESTS + "," + GEOMETRY_TESTS + "," + UI_TEST}[options.suite]
 sys.argv = [sys.argv[0], *remaining]
 runner.EXPECTED_TESTS = len(runner.TEST_CLASS.split(","))
 sys.exit(runner.main())

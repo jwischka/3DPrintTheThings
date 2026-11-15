@@ -186,7 +186,7 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
             python3 scripts/native/run-native-instrumentation.py --suite core --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/instrumentation.log --timeout 900
@@ -194,7 +194,12 @@ jobs:
             python3 tools/parity/parity.py inspect native-slice-report/cube/cube_10mm.android.gcode > native-slice-report/cube/metrics.json
             cp "$RUNNER_TEMP/native-engine-x86/sha256.txt" native-slice-report/engine-sha256.txt
             adb shell am force-stop io.github.jwischka.threedprintthethings
+            python3 scripts/native/run-native-instrumentation.py --suite geometry --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/geometry-instrumentation.log --timeout 600
+            adb shell am force-stop io.github.jwischka.threedprintthethings
             python3 scripts/native/run-native-instrumentation.py --suite ui --app "$RUNNER_TEMP/native-test/app-x86.apk" --test "$RUNNER_TEMP/native-test/test-x86.apk" --log native-slice-report/main-ui-instrumentation.log --timeout 600
+            mkdir -p native-slice-report/screenshots
+            for name in library prepare preview upload; do adb exec-out run-as io.github.jwischka.threedprintthethings cat "files/workflow-capture/$name.png" > "native-slice-report/screenshots/$name.png" || exit 1; done
+            sha256sum native-slice-report/screenshots/*.png > native-slice-report/screenshots/sha256.txt
       - name: Stop simulator and retain diagnostics
         if: always()
         run: |

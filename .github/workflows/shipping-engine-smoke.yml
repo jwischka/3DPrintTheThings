@@ -8,7 +8,9 @@ on:
     paths:
       - .github/workflows/shipping-engine-smoke.yml
       - scripts/native/run-shipping-instrumentation.py
+      - scripts/native/run-native-instrumentation.py
       - scripts/native/tests/test_shipping_instrumentation.py
+      - app/src/androidTest/java/com/u1/slicer/MainActivityWorkflowInstrumentedTest.kt
 
 permissions:
   contents: read
@@ -81,12 +83,17 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
             python3 scripts/native/run-shipping-instrumentation.py --app app/build/outputs/apk/debug/app-debug.apk --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk --report-dir shipping-smoke-report/device --timeout 900
             python3 scripts/native/export-parity-capture.py --output shipping-smoke-report/cube
             python3 tools/parity/parity.py inspect shipping-smoke-report/cube/cube_10mm.android.gcode > shipping-smoke-report/cube/metrics.json
+            adb shell am force-stop io.github.jwischka.threedprintthethings
+            python3 scripts/native/run-native-instrumentation.py --suite ui --app app/build/outputs/apk/debug/app-debug.apk --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk --log shipping-smoke-report/ui-instrumentation.log --timeout 900
+            mkdir -p shipping-smoke-report/screenshots
+            for name in library prepare preview upload; do adb exec-out run-as io.github.jwischka.threedprintthethings cat "files/workflow-capture/$name.png" > "shipping-smoke-report/screenshots/$name.png" || exit 1; done
+            sha256sum shipping-smoke-report/screenshots/*.png > shipping-smoke-report/screenshots/sha256.txt
 
       - name: Stop simulator and retain its log
         if: always()
