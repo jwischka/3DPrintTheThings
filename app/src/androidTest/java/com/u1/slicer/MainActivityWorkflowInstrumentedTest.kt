@@ -3,6 +3,7 @@ package com.u1.slicer
 import android.Manifest
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Build
 import android.util.Log
 import android.view.View
@@ -24,6 +25,7 @@ import com.u1.slicer.gcode.GcodeParser
 import com.u1.slicer.gcode.GcodeValidator
 import com.u1.slicer.library.DownloadProvenance
 import com.u1.slicer.printer.PrinterViewModel
+import com.u1.slicer.viewer.GcodeViewerView
 import com.u1.slicer.viewer.ModelViewerView
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -55,11 +57,11 @@ class MainActivityWorkflowInstrumentedTest {
     private lateinit var decorView: View
     private fun stage(name: String) { Log.i("WorkflowE2E", name) }
 
-    private fun prepareViewer(root: View): ModelViewerView? {
-        if (root is ModelViewerView) return root
+    private fun findViewer(root: View, type: Class<out View>): View? {
+        if (type.isInstance(root)) return root
         if (root is ViewGroup) {
             for (index in 0 until root.childCount) {
-                prepareViewer(root.getChildAt(index))?.let { return it }
+                findViewer(root.getChildAt(index), type)?.let { return it }
             }
         }
         return null
@@ -69,7 +71,9 @@ class MainActivityWorkflowInstrumentedTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         compose.waitUntil(30_000) {
             var viewer: ModelViewerView? = null
-            instrumentation.runOnMainSync { viewer = prepareViewer(decorView) }
+            instrumentation.runOnMainSync {
+                viewer = findViewer(decorView, ModelViewerView::class.java) as? ModelViewerView
+            }
             val current = viewer ?: return@waitUntil false
             val checked = CountDownLatch(1)
             var hasMesh = false
@@ -79,6 +83,45 @@ class MainActivityWorkflowInstrumentedTest {
             }
             checked.await(1, TimeUnit.SECONDS) && hasMesh
         }
+    }
+
+    private fun sceneBounds(type: Class<out View>): Rect? {
+        var bounds: Rect? = null
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val view = findViewer(decorView, type)
+            if (view != null && view.isAttachedToWindow && view.width > 0 && view.height > 0) {
+                val point = IntArray(2)
+                view.getLocationOnScreen(point)
+                bounds = Rect(point[0], point[1], point[0] + view.width, point[1] + view.height)
+            }
+        }
+        return bounds
+    }
+
+    private fun hasVisibleScene(bitmap: Bitmap, bounds: Rect): Boolean {
+        // The pinned cube fixture renders red in both viewers. Scan the viewer's
+        // interior, below the top action card and above bottom controls, for
+        // several red pixels. Blank GL/Card backgrounds and green UI buttons
+        // cannot satisfy this fixture-specific check.
+        val left = (bounds.left + bounds.width() / 10).coerceIn(0, bitmap.width - 1)
+        val right = (bounds.left + bounds.width() * 9 / 10).coerceIn(0, bitmap.width - 1)
+        val top = (bounds.top + bounds.height() * 20 / 100).coerceIn(0, bitmap.height - 1)
+        val bottom = (bounds.top + bounds.height() * 65 / 100).coerceIn(0, bitmap.height - 1)
+        if (right <= left || bottom <= top) return false
+        val stride = maxOf(1, (right - left) / 320)
+        var redPixels = 0
+        for (y in top..bottom step stride) {
+            for (x in left..right step stride) {
+                val pixel = bitmap.getPixel(x, y)
+                val red = (pixel shr 16) and 0xFF
+                val green = (pixel shr 8) and 0xFF
+                val blue = pixel and 0xFF
+                if (red >= 120 && red * 2 > green * 3 && red * 2 > blue * 3) {
+                    if (++redPixels >= 4) return true
+                }
+            }
+        }
+        return false
     }
 
     private fun capture(name: String, directory: File) {
@@ -100,7 +143,26 @@ class MainActivityWorkflowInstrumentedTest {
                 }
             }
         }
-        val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        val sceneType = when (name) {
+            "prepare.png" -> ModelViewerView::class.java
+            "preview.png" -> GcodeViewerView::class.java
+            else -> null
+        }
+        var accepted: Bitmap? = null
+        if (sceneType != null) {
+            compose.waitUntil(30_000) {
+                val bounds = sceneBounds(sceneType) ?: return@waitUntil false
+                val shot = instrumentation.uiAutomation.takeScreenshot() ?: return@waitUntil false
+                if (hasVisibleScene(shot, bounds)) {
+                    accepted = shot
+                    true
+                } else {
+                    shot.recycle()
+                    false
+                }
+            }
+        }
+        val bitmap = accepted ?: instrumentation.uiAutomation.takeScreenshot()
             ?: throw AssertionError("Could not capture $name")
         try {
             assertTrue("Unexpected screenshot dimensions", bitmap.width in 1..4096 && bitmap.height in 1..4096)
