@@ -159,14 +159,32 @@ class MainActivityWorkflowInstrumentedTest {
             compose.waitUntil(180_000) { slicerVm.state.value is SlicerViewModel.SlicerState.SliceComplete }
             stage("slice-complete")
             val sliced = slicerVm.state.value as SlicerViewModel.SlicerState.SliceComplete
-            val source = File(sliced.result.gcodePath)
-            assertTrue("UI slice produced no G-code", source.isFile && source.length() > 0)
-            val summary = GcodeValidator.summarizeParsedOutput(GcodeParser.parse(source))
+            val generated = File(sliced.result.gcodePath)
+            assertTrue("UI slice produced no G-code", generated.isFile && generated.length() > 0)
+            val summary = GcodeValidator.summarizeParsedOutput(GcodeParser.parse(generated))
             assertFalse("UI preview has no model extrusion", GcodeValidator.isEffectivelyEmpty(summary))
-            val markers = source.useLines { lines -> lines.count { it.trim() == ";LAYER_CHANGE" } }
+            val markers = generated.useLines { lines -> lines.count { it.trim() == ";LAYER_CHANGE" } }
             assertTrue("UI slice has no layer markers", markers > 0)
             assertEquals(markers, summary.layerCount)
             stage("gcode-parsed")
+
+            // SliceComplete is emitted once for the transient native output and again
+            // after the Jobs DAO points to a durable copy. Preview's Upload Only action
+            // uses the latter state, so bind our byte comparison to that same file.
+            val jobsDir = File(context.filesDir, "jobs").canonicalPath + File.separator
+            compose.waitUntil(20_000) {
+                val path = (slicerVm.state.value as? SlicerViewModel.SlicerState.SliceComplete)
+                    ?.result?.gcodePath ?: return@waitUntil false
+                val file = File(path)
+                file.canonicalPath.startsWith(jobsDir) && file.isFile && file.length() > 0
+            }
+            val source = File((slicerVm.state.value as SlicerViewModel.SlicerState.SliceComplete).result.gcodePath)
+            runBlocking {
+                withTimeout(5_000) {
+                    slicerVm.sliceJobs.first { jobs -> jobs.any { it.gcodePath == source.absolutePath } }
+                }
+            }
+            stage("durable-gcode-ready")
 
             compose.waitUntil(20_000) {
                 compose.onAllNodesWithText("Upload Only").fetchSemanticsNodes().isNotEmpty() &&

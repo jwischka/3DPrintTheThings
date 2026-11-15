@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 
 
-TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest,com.u1.slicer.ui.LiveSpoolMappingInstrumentedTest,com.u1.slicer.library.LibraryScreenInstrumentedTest,com.u1.slicer.network.SimulatedU1InstrumentedTest,com.u1.slicer.LongOpServiceInstrumentedTest"
+TEST_CLASS = "com.u1.slicer.browse.SiteBrowserInstrumentedTest,com.u1.slicer.ui.printer.PrinterSettingsInstrumentedTest,com.u1.slicer.ui.LiveSpoolMappingInstrumentedTest,com.u1.slicer.library.LibraryScreenInstrumentedTest,com.u1.slicer.network.SimulatedU1InstrumentedTest,com.u1.slicer.LongOpServiceInstrumentedTest,com.u1.slicer.viewer.GcodeRendererContextInstrumentedTest"
 EXPECTED_TESTS = None
 RUNNER = "io.github.jwischka.threedprintthethings.test/androidx.test.runner.AndroidJUnitRunner"
 

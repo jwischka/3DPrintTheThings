@@ -93,7 +93,7 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: >-
             python3 tools/run-browser-instrumentation.py
