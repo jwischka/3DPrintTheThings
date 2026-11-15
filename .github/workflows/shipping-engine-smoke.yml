@@ -17,6 +17,10 @@ permissions:
 
 jobs:
   arm64-shipping-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        renderer: [swangle, lavapipe]
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -77,13 +81,13 @@ jobs:
           cat "$RUNNER_TEMP/u1-simulator.log"
           exit 1
 
-      - name: Test original ARM64 APK with Google APIs native bridge
+      - name: Test original ARM64 APK with Google APIs native bridge (${{ matrix.renderer }})
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
-          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu ${{ matrix.renderer }} -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
             python3 scripts/native/run-shipping-instrumentation.py --app app/build/outputs/apk/debug/app-debug.apk --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk --report-dir shipping-smoke-report/device --timeout 900
@@ -106,6 +110,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: shipping-arm64-engine-smoke-attempt-${{ github.run_attempt }}
+          name: shipping-arm64-engine-smoke-${{ matrix.renderer }}-attempt-${{ github.run_attempt }}
           path: shipping-smoke-report/
           if-no-files-found: warn
