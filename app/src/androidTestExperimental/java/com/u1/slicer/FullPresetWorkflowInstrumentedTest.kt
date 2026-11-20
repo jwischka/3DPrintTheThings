@@ -1,6 +1,5 @@
 package com.u1.slicer
 
-import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -44,11 +43,7 @@ class FullPresetWorkflowInstrumentedTest {
         val invalid = uri(File(documents, "broken.zip").apply { writeText("not a preset bundle") })
         fun screenshot(name: String) {
             compose.waitForIdle()
-            val directory = File(context.filesDir, "preset-workflow-capture").apply { mkdirs() }
-            val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-            try {
-                File(directory, "$name.png").outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-            } finally { bitmap.recycle() }
+            saveFullPresetScreenshot(name)
         }
         try {
         ActivityScenario.launch(FullPresetActivity::class.java).use { scenario ->

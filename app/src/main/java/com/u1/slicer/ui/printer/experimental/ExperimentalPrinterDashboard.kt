@@ -4,23 +4,36 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.text.format.DateFormat
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,15 +45,22 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.u1.slicer.R
@@ -64,7 +84,7 @@ fun ExperimentalPrinterDashboard(modifier: Modifier = Modifier) {
     val settings = remember(context) { ExperimentalPrinterConnection(context) }
     var connection by remember(settings) { mutableStateOf<PrinterConnection?>(null) }
     var editConnection by rememberSaveable { mutableStateOf(false) }
-    var configurationVersion by remember { mutableIntStateOf(0) }
+    var configurationVersion by rememberSaveable { mutableStateOf(0) }
 
     LaunchedEffect(settings) {
         connection = withContext(Dispatchers.IO) { settings.load() }
@@ -207,7 +227,7 @@ private fun ConnectedPrinter(
     val reading = latest
     val staleAt = reading?.receivedAt?.takeUnless { online }
     reading?.let { JobStatusCard(it.snapshot, staleAt) }
-    CameraCard(client, online, cameraMaxWidth)
+    CameraCard(client, online, cameraMaxWidth, connection.endpoint, configurationVersion)
     reading?.let { TemperaturesCard(it.snapshot, staleAt) }
 }
 
@@ -311,11 +331,18 @@ private data class CameraFrame(
 )
 
 @Composable
-private fun CameraCard(client: MoonrakerClient?, online: Boolean, maxWidth: Dp) {
+private fun CameraCard(
+    client: MoonrakerClient?,
+    online: Boolean,
+    maxWidth: Dp,
+    endpoint: String,
+    configurationVersion: Int,
+) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var frame by remember(client) { mutableStateOf<CameraFrame?>(null) }
     var pending by remember(client) { mutableStateOf(false) }
     var unavailable by remember(client) { mutableStateOf(false) }
+    var expanded by rememberSaveable(endpoint, configurationVersion) { mutableStateOf(false) }
 
     LaunchedEffect(client, lifecycle, online) {
         if (client == null || !online) return@LaunchedEffect
@@ -334,36 +361,124 @@ private fun CameraCard(client: MoonrakerClient?, online: Boolean, maxWidth: Dp) 
         }
     }
 
+    val latest = frame
+    val image = remember(latest?.bitmap) { latest?.bitmap?.asImageBitmap() }
+    val caption = latest?.let {
+        val label = if (online && !unavailable && !pending) R.string.experimental_printer_snapshot_received
+        else R.string.experimental_printer_snapshot_stale
+        stringResource(label, timeOfDay(it.receivedAt))
+    }
+    val cameraStatus = stringResource(
+        when {
+            !online -> R.string.experimental_printer_camera_offline
+            unavailable && !pending -> R.string.experimental_printer_camera_unavailable
+            else -> R.string.experimental_printer_camera_loading
+        },
+    )
     DashboardCard {
         Text(stringResource(R.string.experimental_printer_camera), style = MaterialTheme.typography.titleLarge)
-        val latest = frame
-        if (latest != null) {
-            Image(
-                bitmap = remember(latest.bitmap) { latest.bitmap.asImageBitmap() },
-                contentDescription = stringResource(R.string.experimental_printer_snapshot),
-                contentScale = ContentScale.Fit,
+        if (image != null && caption != null && latest != null) {
+            val expandLabel = stringResource(R.string.experimental_printer_expand_camera)
+            Box(
                 modifier = Modifier.align(Alignment.CenterHorizontally)
                     .widthIn(max = maxWidth).fillMaxWidth().aspectRatio(CAMERA_ASPECT_RATIO)
+                    .clickable(role = Role.Button, onClickLabel = expandLabel) { expanded = true }
                     .testTag("experimental-printer-camera-frame"),
-            )
-            val label = if (online && !unavailable && !pending) R.string.experimental_printer_snapshot_received
-            else R.string.experimental_printer_snapshot_stale
-            Text(stringResource(label, timeOfDay(latest.receivedAt)), style = MaterialTheme.typography.bodySmall)
-            if (latest.isStoredMonitorFile) {
-                Text(
-                    stringResource(R.string.experimental_printer_snapshot_capture_unknown),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            ) {
+                Image(
+                    bitmap = image,
+                    contentDescription = stringResource(R.string.experimental_printer_snapshot),
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.matchParentSize(),
+                )
+                Icon(
+                    Icons.Default.Fullscreen,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), CircleShape).padding(6.dp),
                 )
             }
+            CameraSnapshotCaption(caption, latest.isStoredMonitorFile)
         } else {
-            val message = when {
-                !online -> R.string.experimental_printer_camera_offline
-                unavailable && !pending -> R.string.experimental_printer_camera_unavailable
-                else -> R.string.experimental_printer_camera_loading
-            }
-            Text(stringResource(message))
+            Text(cameraStatus)
         }
+    }
+    if (expanded) {
+        ExpandedCamera(
+            image = image,
+            caption = caption,
+            isStoredMonitorFile = latest?.isStoredMonitorFile == true,
+            cameraStatus = cameraStatus,
+            onClose = { expanded = false },
+        )
+    }
+}
+
+@Composable
+private fun ExpandedCamera(
+    image: ImageBitmap?,
+    caption: String?,
+    isStoredMonitorFile: Boolean,
+    cameraStatus: String,
+    onClose: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.experimental_printer_camera),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f).semantics { heading() },
+                    )
+                    IconButton(onClick = onClose, modifier = Modifier.testTag("experimental-printer-camera-close")) {
+                        Icon(Icons.Default.Close, stringResource(R.string.experimental_printer_close_camera))
+                    }
+                }
+                if (image != null && caption != null) {
+                    Image(
+                        bitmap = image,
+                        contentDescription = stringResource(R.string.experimental_printer_snapshot),
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black)
+                            .testTag("experimental-printer-camera-expanded"),
+                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        CameraSnapshotCaption(
+                            caption,
+                            isStoredMonitorFile,
+                            Modifier.testTag("experimental-printer-expanded-camera-caption"),
+                        )
+                    }
+                } else {
+                    Box(Modifier.fillMaxWidth().weight(1f).padding(16.dp), contentAlignment = Alignment.Center) {
+                        Text(cameraStatus)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CameraSnapshotCaption(caption: String, isStoredMonitorFile: Boolean, modifier: Modifier = Modifier) {
+    Text(caption, modifier = modifier, style = MaterialTheme.typography.bodySmall)
+    if (isStoredMonitorFile) {
+        Text(
+            stringResource(R.string.experimental_printer_snapshot_capture_unknown),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

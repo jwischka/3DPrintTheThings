@@ -6,13 +6,19 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -76,18 +82,21 @@ class FullPresetLayoutInstrumentedTest {
                     idle(model)
                     assertNull(model.state.value.error)
                     assertMainActions()
+                    val baselineLineHeight = waitForHeadingLineHeight(1f)
                     captureRenderedPreview(stage)
 
                     stage = "layout-landscape-large-text"
                     shell("settings --user current put system font_scale 1.5")
                     waitForConfiguration(scenario, Configuration.ORIENTATION_LANDSCAPE, 1.5f)
                     assertMainActions()
+                    val largeLineHeight = waitForHeadingLineHeight(1.5f, baselineLineHeight)
                     captureRenderedPreview(stage)
                     checkSettings()
 
                     stage = "layout-landscape-error-max-text"
                     shell("settings --user current put system font_scale 2.0")
                     waitForConfiguration(scenario, Configuration.ORIENTATION_LANDSCAPE, 2f)
+                    waitForHeadingLineHeight(2f, largeLineHeight)
                     val invalidBundle = File(documents, "invalid.zip").apply { writeText("not a preset bundle") }
                     val invalidBundleUri = documentUri(invalidBundle)
                     val selection = requireNotNull(model.state.value.selection)
@@ -112,6 +121,7 @@ class FullPresetLayoutInstrumentedTest {
                     scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
                     waitForConfiguration(scenario, Configuration.ORIENTATION_PORTRAIT, 1.5f)
                     assertMainActions()
+                    waitForHeadingLineHeight(1.5f, baselineLineHeight)
                     captureRenderedPreview(stage)
                     checkSettings()
                     control("full-presets-slice").performClick()
@@ -175,6 +185,23 @@ class FullPresetLayoutInstrumentedTest {
         control("full-presets-slice")
     }
 
+    private fun waitForHeadingLineHeight(fontScale: Float, largerThan: Float = 0f): Float {
+        val title = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.full_presets_title)
+        val heading = compose.onNode(
+            hasText(title) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading),
+        )
+        var lineHeight = 0f
+        compose.waitUntil(20_000) {
+            if (!heading.isDisplayed()) return@waitUntil false
+            val layouts = mutableListOf<TextLayoutResult>()
+            heading.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.singleOrNull() ?: return@waitUntil false
+            lineHeight = layout.getLineBottom(0) - layout.getLineTop(0)
+            abs(layout.layoutInput.density.fontScale - fontScale) < 0.01f && lineHeight > largerThan
+        }
+        return lineHeight
+    }
+
     private fun checkSettings() {
         openSettings()
         compose.onNodeWithTag("full-presets-printer")
@@ -188,12 +215,11 @@ class FullPresetLayoutInstrumentedTest {
     }
 
     private fun captureRenderedPreview(name: String) {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
         val viewport = compose.onNodeWithTag(PREVIEW_MODEL_SURFACE).assertIsDisplayed()
         // Use composited screen pixels so a clipped or blank GL surface cannot satisfy the check.
         compose.waitUntil(20_000) {
             val bounds = viewport.fetchSemanticsNode().boundsInWindow
-            val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return@waitUntil false
+            val bitmap = takeFullPresetScreenshot()
             try {
                 val left = bounds.left.roundToInt().coerceIn(0, bitmap.width)
                 val top = bounds.top.roundToInt().coerceIn(0, bitmap.height)

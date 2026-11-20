@@ -55,6 +55,8 @@
     <string name="experimental_printer_no_temperature">Unavailable</string>
     <string name="experimental_printer_camera">Camera</string>
     <string name="experimental_printer_snapshot">Printer camera snapshot</string>
+    <string name="experimental_printer_expand_camera">Expand camera</string>
+    <string name="experimental_printer_close_camera">Close camera</string>
     <string name="experimental_printer_snapshot_received">Snapshot received at %1$s</string>
     <string name="experimental_printer_snapshot_stale">Last snapshot received at %1$s</string>
     <string name="experimental_printer_snapshot_capture_unknown">Stored camera image · capture time unknown</string>

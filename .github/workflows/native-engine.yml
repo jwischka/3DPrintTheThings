@@ -241,6 +241,9 @@ jobs:
           emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            # Suppress system heads-up overlays in evidence from this disposable emulator.
+            adb shell settings put global heads_up_notifications_enabled 0
+            test "$(adb shell settings get global heads_up_notifications_enabled | tr -d '\r\n')" = 0
             # Keep the disposable test process independent of Play Services font-provider restarts.
             adb shell pm disable-user --user 0 com.google.android.gms
             adb shell pm list packages -d --user 0 | tr -d '\r' | grep -Fx 'package:com.google.android.gms'
@@ -266,7 +269,7 @@ jobs:
             python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log native-slice-report/preset-ui-instrumentation.log --timeout 900 --device-diagnostics native-slice-report
             adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > native-slice-report/preset-ui-package-abi.txt
             grep -F 'primaryCpuAbi=${{ matrix.abi }}' native-slice-report/preset-ui-package-abi.txt
-            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text layout-landscape-error-max-text printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
+            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text layout-landscape-error-max-text printer-camera-expanded printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
       - name: Stop simulator and retain diagnostics
         if: always()
         run: |
@@ -342,6 +345,9 @@ jobs:
           emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            # Suppress system heads-up overlays in evidence from this disposable emulator.
+            adb shell settings put global heads_up_notifications_enabled 0
+            test "$(adb shell settings get global heads_up_notifications_enabled | tr -d '\r\n')" = 0
             # Keep the disposable test process independent of Play Services font-provider restarts.
             adb shell pm disable-user --user 0 com.google.android.gms
             adb shell pm list packages -d --user 0 | tr -d '\r' | grep -Fx 'package:com.google.android.gms'
@@ -350,7 +356,7 @@ jobs:
             python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log page-size-report/instrumentation.log --timeout 900 --device-diagnostics page-size-report
             adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > page-size-report/package-abi.txt
             grep -F 'primaryCpuAbi=x86_64' page-size-report/package-abi.txt
-            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text layout-landscape-error-max-text printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "page-size-report/$name.png" || exit 1; done
+            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text layout-landscape-error-max-text printer-camera-expanded printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "page-size-report/$name.png" || exit 1; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

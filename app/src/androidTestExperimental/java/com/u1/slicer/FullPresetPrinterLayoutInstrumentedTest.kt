@@ -5,7 +5,6 @@ import android.app.UiAutomation
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.ParcelFileDescriptor
 import android.view.accessibility.AccessibilityWindowInfo
@@ -25,7 +24,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.lifecycle.Lifecycle
 import com.u1.slicer.data.MoonrakerApiKeyStore
 import com.u1.slicer.ui.printer.experimental.ExperimentalPrinterConnection
-import java.io.File
 import java.net.InetAddress
 import kotlin.math.abs
 import okhttp3.mockwebserver.Dispatcher
@@ -108,14 +106,14 @@ class FullPresetPrinterLayoutInstrumentedTest {
                         compose.waitUntil(20_000) { imeVisible(automation) }
                         field("experimental-printer-api-key")
                         assertTrue("Software keyboard is absent", imeVisible(automation))
-                        capture(automation, context, "printer-editor-keyboard")
+                        capture("printer-editor-keyboard")
 
                         val remove = field("experimental-printer-clear-key")
                         remove.performTouchInput { click() }.assertIsOn()
                         field("experimental-printer-cancel")
                         val save = field("experimental-printer-save")
                         assertTrue("Software keyboard is absent", imeVisible(automation))
-                        capture(automation, context, "printer-editor-actions-keyboard")
+                        capture("printer-editor-actions-keyboard")
                         save.performTouchInput { click() }
                         compose.waitUntil(20_000) {
                             compose.onAllNodesWithTag("experimental-printer-save").fetchSemanticsNodes().isEmpty()
@@ -161,18 +159,9 @@ class FullPresetPrinterLayoutInstrumentedTest {
         !bounds.isEmpty
     }
 
-    private fun capture(automation: UiAutomation, context: Context, name: String) {
+    private fun capture(name: String) {
         compose.waitForIdle()
-        val directory = File(context.filesDir, "preset-workflow-capture")
-        assertTrue(directory.isDirectory || directory.mkdirs())
-        val screenshot = requireNotNull(automation.takeScreenshot())
-        try {
-            File(directory, "$name.png").outputStream().use {
-                assertTrue(screenshot.compress(Bitmap.CompressFormat.PNG, 100, it))
-            }
-        } finally {
-            screenshot.recycle()
-        }
+        saveFullPresetScreenshot(name)
     }
 
     private fun restoreSetting(automation: UiAutomation, group: String, key: String, value: String) {

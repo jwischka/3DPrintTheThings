@@ -1,11 +1,14 @@
 package com.u1.slicer
 
 import android.content.Context
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -15,7 +18,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.data.MoonrakerApiKeyStore
@@ -34,7 +39,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
-import java.io.File
 import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -60,15 +64,7 @@ class FullPresetPrinterInstrumentedTest {
 
         fun capture(name: String) {
             compose.waitForIdle()
-            val directory = File(context.filesDir, "preset-workflow-capture").apply { mkdirs() }
-            val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-            try {
-                File(directory, "$name.png").outputStream().use {
-                    assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
-                }
-            } finally {
-                bitmap.recycle()
-            }
+            saveFullPresetScreenshot(name)
         }
 
         fun waitFor(text: String) {
@@ -101,7 +97,7 @@ class FullPresetPrinterInstrumentedTest {
                     }
                 }
 
-                ActivityScenario.launch(FullPresetActivity::class.java).use {
+                ActivityScenario.launch(FullPresetActivity::class.java).use { scenario ->
                     compose.onNodeWithTag("full-presets-tab-printer").performClick()
                     waitFor("Monitor a printer")
                     compose.onNodeWithTag("experimental-printer-connect").performClick()
@@ -118,6 +114,15 @@ class FullPresetPrinterInstrumentedTest {
                     }
                     capture("printer-connected")
                     compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
+                        .performClick()
+                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
+                    compose.onNodeWithTag("experimental-printer-expanded-camera-caption")
+                        .assertIsDisplayed().assertTextContains("Snapshot received at", substring = true)
+                    capture("printer-camera-expanded")
+                    rotateWhileCameraExpanded(scenario)
+                    compose.onNodeWithTag("experimental-printer-camera-close").assertIsDisplayed().performClick()
+                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertDoesNotExist()
+                    waitFor("Tool 3 · active")
                     compose.onNodeWithText("Tool 3 · active").performScrollTo().assertIsDisplayed()
                     compose.onNodeWithText("220.6 / 220 °C").assertIsDisplayed()
                     capture("printer-temperatures")
@@ -133,6 +138,14 @@ class FullPresetPrinterInstrumentedTest {
                     assertEquals(2, compose.onAllNodesWithText("Last known values at", substring = true)
                         .fetchSemanticsNodes().size)
                     capture("printer-offline")
+                    compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
+                        .performClick()
+                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
+                    compose.onNodeWithTag("experimental-printer-expanded-camera-caption")
+                        .assertIsDisplayed().assertTextContains("Last snapshot received at", substring = true)
+                    pressBack()
+                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertDoesNotExist()
+                    compose.onNodeWithTag("experimental-printer-dashboard").assertIsDisplayed()
                     assertTrue(requests.isNotEmpty() && requests.all { it.method == "GET" })
                 }
             }
@@ -259,6 +272,54 @@ class FullPresetPrinterInstrumentedTest {
 
     private fun waitForText(text: String) {
         compose.waitUntil(20_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    private fun rotateWhileCameraExpanded(scenario: ActivityScenario<FullPresetActivity>) {
+        var originalOrientation = Configuration.ORIENTATION_UNDEFINED
+        var previousRequest = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        scenario.onActivity {
+            originalOrientation = it.resources.configuration.orientation
+            previousRequest = it.requestedOrientation
+        }
+        val newOrientation = if (originalOrientation == Configuration.ORIENTATION_PORTRAIT) {
+            Configuration.ORIENTATION_LANDSCAPE
+        } else {
+            Configuration.ORIENTATION_PORTRAIT
+        }
+
+        try {
+            scenario.onActivity {
+                it.requestedOrientation = if (newOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
+            }
+            waitForOrientation(scenario, newOrientation)
+            compose.onNodeWithTag("experimental-printer-camera-close").assertIsDisplayed()
+            compose.waitUntil(20_000) {
+                compose.onAllNodesWithTag("experimental-printer-camera-expanded").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
+        } finally {
+            if (scenario.state != Lifecycle.State.DESTROYED) {
+                scenario.onActivity { it.requestedOrientation = previousRequest }
+            }
+        }
+        waitForOrientation(scenario, originalOrientation)
+    }
+
+    private fun waitForOrientation(scenario: ActivityScenario<FullPresetActivity>, orientation: Int) {
+        compose.waitUntil(20_000) {
+            var matches = false
+            if (scenario.state == Lifecycle.State.RESUMED) {
+                scenario.onActivity { matches = it.resources.configuration.orientation == orientation }
+            }
+            matches
+        }
+        compose.waitUntil(20_000) {
+            compose.onAllNodesWithTag("experimental-printer-camera-close").fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     private fun printStatus(filename: String) =

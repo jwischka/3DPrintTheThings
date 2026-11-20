@@ -70,6 +70,8 @@ snapshot. The `monitor.jpg` fallback can serve a cached image with unknown
 capture time; while using it, discovery periodically checks for a recovered
 webcam. The optional API key uses the private no-backup store and
 attaches only within the configured scheme, host, port, and path prefix.
+The camera can expand to a full-window view using the same frame, polling loop,
+and freshness labels as the dashboard.
 Monitoring requests disable redirects. Shared credential and endpoint rules
 are documented under [Moonraker connections and transfers](printer-connection.md).
 

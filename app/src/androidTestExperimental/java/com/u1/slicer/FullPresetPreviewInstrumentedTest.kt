@@ -277,13 +277,7 @@ class FullPresetPreviewInstrumentedTest {
 
     private fun captureScreen(name: String) {
         compose.waitForIdle()
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-        try {
-            savePng(screenshot, name)
-        } finally {
-            screenshot.recycle()
-        }
+        saveFullPresetScreenshot(name)
     }
 
     private fun savePng(bitmap: Bitmap, name: String) {
