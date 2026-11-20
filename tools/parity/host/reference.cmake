@@ -7,6 +7,7 @@ if(NOT TARGET opencv_world)
 endif()
 add_executable(preset-reference
     "${PARITY_REPO}/tools/parity/host/reference.cpp"
+    "${PARITY_REPO}/tools/parity/host/nanosvg.cpp"
     "${PARITY_REPO}/app/src/main/cpp/src/sapil_presets.cpp")
 target_compile_features(preset-reference PRIVATE cxx_std_17)
 target_include_directories(preset-reference PRIVATE

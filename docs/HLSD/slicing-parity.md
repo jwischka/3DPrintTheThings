@@ -1,7 +1,7 @@
 # Slicing parity harness
 
-The parity harness compares G-code exported by the desktop Orca CLI with G-code
-produced by the Android engine. It reports CONFIG_BLOCK settings, layer marker
+The parity harness compares G-code exported by a Linux reference or desktop Orca
+CLI with G-code produced by the Android engine. It reports CONFIG_BLOCK settings, layer marker
 count, ordered tool changes, consumed filament length per tool, and duration
 metadata. It accounts for retraction debt so an unretraction does not count as
 new consumed filament. It normalizes line endings, comments, and command
@@ -54,6 +54,25 @@ Klipper metadata, and unknown-macro rejection remain in force. A
 `macro-free-diagnostic` capture is explicitly sanitized evidence and cannot be
 presented as real U1 profile parity. Captures without complete provenance are
 not eligible for matched-preset comparison.
+
+The `Same-source Linux preset reference` workflow builds the exact engine gitlink
+through the pinned upstream CMake core target with real Linux dependencies. The
+`Experimental native engine build` workflow prepares the same U1 preset closure
+from that gitlink and captures both Android ABIs. `prepare_presets.py` writes
+the unchanged `actual` manifest and an explicitly modified `diagnostic` manifest;
+its summary records every copied file hash and every diagnostic override. The
+Linux executable first compares actual-manifest composition with upstream's
+independent Snapmaker vendor importer, requiring every serialized option to match.
+The diagnostic manifest uses derived children of the same original presets.
+
+`capture_reference.py` hashes the Linux inputs and outputs. The Android export
+script independently rehashes its prepared bundle and pulled G-code before
+accepting the device's provenance report. The retained Linux files are
+`captures/<variant>/capture.json` and `cube.gcode`; Android files are
+`presets/<variant>.json` and `<variant>.gcode`. Run the provenance gate and then
+the strict comparator separately for each variant and ABI. A single cube is the
+matched capture fixture; the additional Android two-cube test verifies distinct
+filament assignments and model extrusion but is not a desktop parity capture.
 
 The comparison command also accepts two G-code paths. Optional absolute
 epsilons are set with `--extrusion-abs-eps-mm` and
