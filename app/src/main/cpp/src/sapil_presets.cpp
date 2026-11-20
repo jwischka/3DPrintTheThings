@@ -1,6 +1,7 @@
 #include "sapil_presets.h"
 #include "libslic3r/PresetBundle.hpp"
 #include <nlohmann/json.hpp>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -84,10 +85,15 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     const auto& print = resolve(by_path.at(process), "process");
     const auto* nozzles = machine.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
     const auto* semm = machine.option<Slic3r::ConfigOptionBool>("single_extruder_multi_material");
+    const auto* technology = machine.option<Slic3r::ConfigOptionEnumGeneric>("printer_technology");
+    if (!technology || technology->value != Slic3r::ptFFF)
+        throw std::runtime_error("Only FFF printer presets are supported");
     if (!nozzles || nozzles->values.empty() || nozzles->values.size() > 16 ||
         (filaments.size() > nozzles->values.size() &&
          !(nozzles->values.size() == 1 && semm && semm->value)))
         throw std::runtime_error("Unsupported preset extruder topology");
+    for (double diameter : nozzles->values)
+        if (!std::isfinite(diameter) || diameter <= 0) throw std::runtime_error("Invalid nozzle diameter");
     for (const char* key : {"support_filament", "support_interface_filament", "wipe_tower_filament",
                             "wall_filament", "sparse_infill_filament", "solid_infill_filament"}) {
         const auto* index = print.option<Slic3r::ConfigOptionInt>(key);

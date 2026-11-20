@@ -18,8 +18,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      HOST_REFERENCE_DIR: ${{ runner.temp }}/host-reference
-      CCACHE_DIR: ${{ runner.temp }}/host-reference-ccache
       CCACHE_MAXSIZE: 2G
       NATIVE_JOBS: '2'
     steps:
@@ -42,6 +40,9 @@ jobs:
           key: host-reference-gcc13-${{ steps.pin.outputs.sha }}-${{ github.run_id }}
           restore-keys: host-reference-gcc13-${{ steps.pin.outputs.sha }}-
       - name: Build independent upstream Linux reference
+        env:
+          HOST_REFERENCE_DIR: ${{ runner.temp }}/host-reference
+          CCACHE_DIR: ${{ runner.temp }}/host-reference-ccache
         run: |
           set -o pipefail
           mkdir -p host-reference-report
