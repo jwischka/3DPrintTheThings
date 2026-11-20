@@ -1137,6 +1137,7 @@ add_library(prusaslicer-jni SHARED
     src/sapil_diagnostics.cpp
     src/sapil_model.cpp
     src/sapil_print.cpp
+    src/sapil_presets.cpp
     src/sapil_gcode.cpp
     src/sapil_progress.cpp
     src/sapil_arrange.cpp

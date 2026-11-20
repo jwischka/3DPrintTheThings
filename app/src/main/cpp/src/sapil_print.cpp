@@ -1,12 +1,18 @@
 #include "../include/sapil.h"
 #include "sapil_internal.h"
+#include "sapil_presets.h"
 #include "sapil_diagnostics.h"
 #include <atomic>
+#include <algorithm>
+#include <cctype>
 #include <thread>
 #include <chrono>
 #include <fstream>
 #include <sstream>
 #include <mutex>
+#include <stdexcept>
+#include <utility>
+#include <nlohmann/json.hpp>
 
 // Slicer includes
 #include "libslic3r/Print.hpp"
@@ -969,8 +975,25 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // OrcaSlicer uses its built-in default start G-code which lacks SM_ commands.
         // applyConfigToPrusa runs LAST so that JNI user settings (wipe tower on/off,
         // temperatures, layer height, speeds, etc.) override the embedded profile.
+        bool full_profile = false;
+        size_t full_preset_filament_count = 0;
         Slic3r::DynamicPrintConfig dpc;
-        dpc.apply(Slic3r::FullPrintConfig::defaults());
+        {
+            std::lock_guard<std::mutex> lock(pImpl->preset_mutex);
+            if (pImpl->preset_state == Impl::PresetState::Invalid)
+                throw std::runtime_error("Preset load failed; reset or load a valid preset");
+            full_profile = pImpl->preset_state == Impl::PresetState::Ready;
+            if (full_profile) {
+                dpc = pImpl->full_preset_config;
+                full_preset_filament_count = pImpl->full_preset_filament_count;
+            }
+        }
+        if (full_profile && !getModelConfig().empty())
+            throw std::runtime_error("Full presets currently require a model without embedded project settings");
+        if (!full_profile) dpc.apply(Slic3r::FullPrintConfig::defaults());
+        bool is_snapmaker_profile = false;
+        int applied = 0;
+        if (!full_profile) {
 
         // Detect whether the embedded config is a Snapmaker profile before applying
         // any overrides — both applyConfigToPrusa and profile_keys need this flag.
@@ -998,7 +1021,6 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // bypasses ProfileEmbedder is direct legacy load of pre-marked
         // Snapmaker 3MFs (where the heuristic fires correctly).
         auto& model_config = getModelConfig();
-        bool is_snapmaker_profile = false;
         if (!model_config.empty()) {
             auto* start_opt = model_config.option<Slic3r::ConfigOptionString>("machine_start_gcode");
             if (start_opt && start_opt->value.find("PRINT_START") != std::string::npos) {
@@ -1022,7 +1044,6 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // variables (flush_volumetric_speeds, M620, etc.) that cause parse errors.
         // Applying all 391 keys causes SIGSEGV — many have array sizes, feature flags,
         // or template macros that conflict with our minimal Print pipeline.
-        int applied = 0;
         if (!model_config.empty()) {
             if (is_bambu_embedded_profile) {
                 // Process and filament settings only.  In particular this list
@@ -1522,6 +1543,7 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
             }
         }
 
+        } // Legacy embedded-profile mapping and vector padding.
         if (progress) progress(5, "Preparing print configuration");
 
         // Create a Print object
@@ -1529,6 +1551,26 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
 
         // Apply model + config to the print
         Slic3r::Model& model = getGlobalModel();
+        if (full_profile) {
+            for (const auto* object : model.objects) {
+                std::string path = object->input_file;
+                std::transform(path.begin(), path.end(), path.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                if (path.size() < 4 || path.substr(path.size() - 4) != ".stl")
+                    throw std::runtime_error("Full presets currently require STL input");
+                for (const auto& key : object->config.keys())
+                    if (key != "extruder") throw std::runtime_error("Unsupported model-specific setting");
+                if (!object->layer_config_ranges.empty() || !object->layer_height_profile.empty())
+                    throw std::runtime_error("Unsupported model-specific layer settings");
+                for (const auto* volume : object->volumes) {
+                    for (const auto& key : volume->config.keys())
+                        if (key != "extruder") throw std::runtime_error("Unsupported volume-specific setting");
+                    const int tool = volume->extruder_id();
+                    if (tool < 0 || static_cast<size_t>(tool) > full_preset_filament_count)
+                        throw std::runtime_error("Model references an unavailable filament");
+                }
+            }
+        }
 
         // Ensure every object sits on the bed (min z = 0).
         // Per-object ensure_on_bed() is correct: each restructured Bambu build
@@ -1550,7 +1592,7 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // triggered an unwanted full re-centre on top of the user's drag.
         // 2 mm absorbs that without losing the safety property: a model
         // that is genuinely off-bed will be off by tens of millimetres.
-        {
+        if (!full_profile) {
             const double BED_X = 270.0, BED_Y = 270.0;
             const double EDGE_TOL = 2.0;
             Slic3r::BoundingBoxf3 worldBB;
@@ -1653,6 +1695,7 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         {
             auto validation = print.validate();
             if (!validation.string.empty()) {
+                if (full_profile) throw std::runtime_error("Full preset print validation failed: " + validation.string);
                 SAPIL_LOGW("Print validation: %s", validation.string.c_str());
             } else {
                 SAPIL_LOGI("Print validation: OK");
@@ -1838,6 +1881,40 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
 }
 
 bool SlicerEngine::loadProfile(const std::string& ini_path) {
+    std::lock_guard<std::mutex> lock(pImpl->preset_mutex);
+    if (ini_path.empty()) {
+        pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
+        pImpl->full_preset_filament_count = 0;
+        pImpl->preset_state = Impl::PresetState::Legacy;
+        return true;
+    }
+    if (ini_path.size() >= 5 && ini_path.substr(ini_path.size() - 5) == ".json") {
+        pImpl->preset_state = Impl::PresetState::Invalid;
+        pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
+        pImpl->full_preset_filament_count = 0;
+        try {
+            auto loaded = load_full_presets(ini_path);
+            pImpl->full_preset_config = std::move(loaded.config);
+            pImpl->full_preset_filament_count = loaded.filament_count;
+            pImpl->preset_state = Impl::PresetState::Ready;
+            const nlohmann::json event = {
+                {"schema", "orca-native-presets-v1"},
+                {"resolvedInputs", loaded.resolved_inputs},
+                {"filamentCount", loaded.filament_count},
+                {"configKeyCount", pImpl->full_preset_config.keys().size()}
+            };
+            diagnostics_record_native_event("full_preset_loaded", event.dump());
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+    if (pImpl->preset_state != Impl::PresetState::Legacy) {
+        pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
+        pImpl->full_preset_filament_count = 0;
+        pImpl->preset_state = Impl::PresetState::Invalid;
+        return false;
+    }
     try {
         pImpl->print_config.load_from_ini(ini_path, Slic3r::ForwardCompatibilitySubstitutionRule::Enable);
         return true;
@@ -1847,6 +1924,7 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
 }
 
 SliceConfig SlicerEngine::getConfigFromProfile() const {
+    std::lock_guard<std::mutex> lock(pImpl->preset_mutex);
     SliceConfig config;
     const auto& dpc = pImpl->print_config;
 
