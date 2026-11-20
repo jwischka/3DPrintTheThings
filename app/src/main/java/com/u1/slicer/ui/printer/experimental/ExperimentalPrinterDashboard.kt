@@ -252,6 +252,18 @@ private fun JobStatusCard(snapshot: MoonrakerStatusSnapshot, staleAt: Long?) {
         }
         Text(stringResource(title), style = MaterialTheme.typography.titleLarge)
         staleAt?.let { StaleStatusCaption(it) }
+        snapshot.reportedReason?.let { reason ->
+            val label = if (staleAt == null) R.string.experimental_printer_reported_reason
+            else R.string.experimental_printer_stale_reason
+            Text(
+                stringResource(label, reason),
+                modifier = Modifier.testTag("experimental-printer-reported-reason"),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 5,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if ((readiness == null || readiness == "ready") && state != "standby") {
             snapshot.filename?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
             val progress = snapshot.progress

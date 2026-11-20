@@ -60,8 +60,10 @@ M73 updates, then file progress and the job status value. The dashboard shows
 elapsed time, printer-reported remaining time, layer counts, and bed and tool
 temperatures when available. Polling runs while the tab is visible and the
 activity is started. Failed polls retain the last reported readings with a
-stale indication. Editing the endpoint or key restarts monitoring with a new
-connection.
+stale indication. Non-ready firmware and paused or failed jobs can show a bounded,
+plain-text reason reported by the printer; retained reasons are labelled stale,
+and active or completed jobs do not show old exceptions. Editing the endpoint or
+key restarts monitoring with a new connection.
 
 Camera snapshots use Moonraker discovery and same-host fallback URLs,
 including the printer's web port. The dashboard reuses a working webcam URL

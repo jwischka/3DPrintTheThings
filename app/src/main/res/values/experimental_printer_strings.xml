@@ -37,6 +37,8 @@
     <string name="experimental_printer_cancelled">Print cancelled</string>
     <string name="experimental_printer_ready">Printer ready</string>
     <string name="experimental_printer_job_unknown">Print state unavailable</string>
+    <string name="experimental_printer_reported_reason">Reported by printer\n%1$s</string>
+    <string name="experimental_printer_stale_reason">Last reported by printer\n%1$s</string>
     <string name="experimental_printer_progress">%1$s complete</string>
     <string name="experimental_printer_elapsed">Elapsed %1$s</string>
     <string name="experimental_printer_print_time">Print time %1$s</string>

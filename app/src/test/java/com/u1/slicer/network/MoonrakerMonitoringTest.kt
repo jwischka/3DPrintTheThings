@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -85,6 +86,42 @@ class MoonrakerMonitoringTest {
             assertEquals(MoonrakerStatusResult.Unavailable(MoonrakerJsonRead.Problem.AUTHORIZATION), client.readStatusSnapshot())
             assertEquals(MoonrakerStatusResult.Unavailable(MoonrakerJsonRead.Problem.HTTP, 503), client.readStatusSnapshot())
         }
+    }
+
+    @Test
+    fun reportedReasonMatchesCurrentFirmwareAndJobStates() {
+        fun reason(webhooks: String, stats: String): String? =
+            MoonrakerStatusSnapshot.parse(JSONObject("""{"webhooks":$webhooks,"print_stats":$stats}""")).reportedReason
+
+        val ready = """{"state":"ready","state_message":"Expected ready banner"}"""
+        val paused = """{"state":"paused","exception":{"message":"  Fixture filament runout  "},"message":"Older job detail"}"""
+        assertEquals("Fixture filament runout", reason(ready, paused))
+        assertEquals(
+            "Job fault",
+            reason(ready, """{"state":"error","exception":{"message":"   "},"message":"Job fault"}"""),
+        )
+        assertEquals(
+            "Job paused by operator",
+            reason("null", """{"state":"paused","exception":{"message":null},"message":"Job paused by operator"}"""),
+        )
+        assertNull(reason(ready, """{"state":"paused","exception":{"message":42},"message":null}"""))
+        assertNull(reason(ready, """{"state":"paused","message":"   "}"""))
+        assertEquals(
+            "Controller disconnected",
+            reason("""{"state":"shutdown","state_message":" Controller disconnected "}""", paused),
+        )
+        assertNull(reason("""{"state":"startup","state_message":" "}""", paused))
+        for (state in listOf("printing", "standby", "complete", "cancelled")) {
+            assertNull("A retained exception should be hidden in $state", reason(ready, paused.replace("paused", state)))
+        }
+        assertEquals(
+            "<printer>\nDetails",
+            reason(ready, """{"state":"error","message":"<printer>\nDetails"}"""),
+        )
+        assertEquals(
+            "a".repeat(512),
+            reason(ready, """{"state":"error","message":"${"a".repeat(700)}"}"""),
+        )
     }
 
     @Test

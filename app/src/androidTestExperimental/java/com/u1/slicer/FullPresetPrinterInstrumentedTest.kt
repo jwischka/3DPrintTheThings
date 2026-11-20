@@ -7,8 +7,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -84,10 +86,10 @@ class FullPresetPrinterInstrumentedTest {
                             return MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
                         }
                         return when (request.path?.substringBefore('?')) {
-                            "/printer/objects/query" -> if (mode.get() == Mode.AUTHORIZATION_REQUIRED) {
-                                MockResponse().setResponseCode(401)
-                            } else {
-                                MockResponse().setBody(PRINTING)
+                            "/printer/objects/query" -> when (mode.get()) {
+                                Mode.AUTHORIZATION_REQUIRED -> MockResponse().setResponseCode(401)
+                                Mode.PAUSED -> MockResponse().setBody(PAUSED)
+                                else -> MockResponse().setBody(PRINTING)
                             }
                             "/server/webcams/list" -> MockResponse().setBody(
                                 """{"result":{"webcams":[{"enabled":true,"snapshot_url":"$endpoint/snapshot.jpg"}]}}""",
@@ -130,6 +132,11 @@ class FullPresetPrinterInstrumentedTest {
                         capture("printer-temperatures")
                         compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
 
+                        mode.set(Mode.PAUSED)
+                        waitFor("Print paused")
+                        compose.onNodeWithTag("experimental-printer-reported-reason").performScrollTo()
+                            .assertIsDisplayed().assertTextContains("Reported by printer\n$PAUSE_REASON")
+                        compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
                         mode.set(Mode.AUTHORIZATION_REQUIRED)
                         waitFor("Authorization required")
                         compose.onNodeWithText("Showing last known values from", substring = true).assertIsDisplayed()
@@ -140,6 +147,8 @@ class FullPresetPrinterInstrumentedTest {
                         assertEquals(2, compose.onAllNodesWithText("Last known values at", substring = true)
                             .fetchSemanticsNodes().size)
                         capture("printer-offline")
+                        compose.onNodeWithTag("experimental-printer-reported-reason").performScrollTo()
+                            .assertIsDisplayed().assertTextContains("Last reported by printer\n$PAUSE_REASON")
                         compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
                             .performClick()
                         compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
@@ -229,9 +238,14 @@ class FullPresetPrinterInstrumentedTest {
                                 compose.onNodeWithTag("full-presets-tab-printer").performClick()
                                 waitForText(originalJob)
                                 compose.onNodeWithTag("experimental-printer-edit").performScrollTo().performClick()
-                                compose.onNodeWithTag("experimental-printer-endpoint").performScrollTo()
-                                    .performTextReplacement(replacementEndpoint)
-                                compose.onNodeWithTag("experimental-printer-save").performScrollTo().assertIsDisplayed()
+                                val endpointField = compose.onNodeWithTag("experimental-printer-endpoint").performScrollTo()
+                                endpointField.performTextReplacement(replacementEndpoint)
+                                assertEquals(
+                                    replacementEndpoint,
+                                    endpointField.fetchSemanticsNode().config[SemanticsProperties.EditableText].text,
+                                )
+                                compose.onNodeWithTag("experimental-printer-save").performScrollTo()
+                                    .assertIsDisplayed().assertIsEnabled()
 
                                 holdOriginal.set(true)
                                 compose.waitUntil(20_000) { oldQueryInFlight.count == 0L }
@@ -393,10 +407,11 @@ class FullPresetPrinterInstrumentedTest {
         }
     }
 
-    private enum class Mode { PRINTING, AUTHORIZATION_REQUIRED, OFFLINE }
+    private enum class Mode { PRINTING, PAUSED, AUTHORIZATION_REQUIRED, OFFLINE }
 
     private companion object {
         const val PRINTER_ID = "experimental-printer-dashboard"
+        const val PAUSE_REASON = "Fixture filament runout"
         const val PRINTING = """{"result":{"status":{
             "webhooks":{"state":"ready"},
             "print_stats":{"state":"printing","filename":"Example bracket.gcode","total_duration":128,
@@ -410,5 +425,9 @@ class FullPresetPrinterInstrumentedTest {
             "extruder3":{"temperature":32.7,"target":0},
             "toolhead":{"extruder":"extruder2"}
         }}}"""
+        val PAUSED = PRINTING.replace(
+            "\"state\":\"printing\"",
+            "\"state\":\"paused\",\"exception\":{\"message\":\"$PAUSE_REASON\"}",
+        )
     }
 }

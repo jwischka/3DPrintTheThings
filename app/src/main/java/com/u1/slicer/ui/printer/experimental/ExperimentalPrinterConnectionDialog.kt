@@ -73,14 +73,16 @@ internal fun ExperimentalPrinterConnectionDialog(
     val dismiss by rememberUpdatedState(onDismiss)
 
     fun saveConnection() {
+        val endpointToSave = ExperimentalPrinterConnection.validateEndpoint(endpoint)
+        val keyToSave = apiKey
+        if (saving || endpointToSave.isEmpty() || !ExperimentalPrinterConnection.validKey(keyToSave)) return
+        val clear = connection.hasApiKey && endpointToSave == connection.endpoint && clearKey
         saving = true
         saveFailed = false
-        val key = apiKey
-        val clear = hasSavedKey && clearKey
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
-                    settings.save(normalized, key, clear)
+                    settings.save(endpointToSave, keyToSave, clear)
                 } catch (_: IOException) {
                     null
                 } catch (_: SecurityException) {
@@ -185,7 +187,7 @@ internal fun ExperimentalPrinterConnectionDialog(
                             Button(
                                 enabled = normalized.isNotEmpty() && validKey && !saving,
                                 modifier = Modifier.testTag("experimental-printer-save"),
-                                onClick = ::saveConnection,
+                                onClick = { saveConnection() },
                             ) {
                                 Text(stringResource(R.string.experimental_printer_save))
                             }

@@ -17,6 +17,7 @@ internal data class MoonrakerHeaterReading(
 internal data class MoonrakerStatusSnapshot(
     val klippyState: String?,
     val printState: String?,
+    val reportedReason: String?,
     val filename: String?,
     val displayProgress: Float?,
     val fileProgress: Float?,
@@ -52,9 +53,19 @@ internal data class MoonrakerStatusSnapshot(
 
     companion object {
         const val COMMON_OBJECTS = "print_stats&virtual_sdcard&heater_bed&extruder&extruder1&extruder2&extruder3"
+        private const val MAX_REASON_LENGTH = 512
 
         fun parse(status: JSONObject): MoonrakerStatusSnapshot {
+            val webhooks = status.optJSONObject("webhooks")
             val stats = status.optJSONObject("print_stats")
+            val klippyState = webhooks.text("state")
+            val printState = stats.text("state")
+            val reportedReason = when {
+                klippyState != null && klippyState != "ready" -> webhooks.reason("state_message")
+                printState == "paused" || printState == "error" ->
+                    stats?.optJSONObject("exception").reason("message") ?: stats.reason("message")
+                else -> null
+            }
             val display = status.optJSONObject("display_status")
             val layers = stats?.optJSONObject("info")
             val extruders = buildMap {
@@ -64,8 +75,9 @@ internal data class MoonrakerStatusSnapshot(
                 }
             }
             return MoonrakerStatusSnapshot(
-                klippyState = status.optJSONObject("webhooks").text("state"),
-                printState = stats.text("state"),
+                klippyState = klippyState,
+                printState = printState,
+                reportedReason = reportedReason,
                 filename = stats.text("filename"),
                 displayProgress = display.progress(),
                 fileProgress = status.optJSONObject("virtual_sdcard").progress(),
@@ -89,6 +101,9 @@ internal data class MoonrakerStatusSnapshot(
 
         private fun JSONObject?.text(key: String): String? =
             (this?.opt(key) as? String)?.takeIf { it.isNotBlank() }
+
+        private fun JSONObject?.reason(key: String): String? =
+            text(key)?.trim()?.take(MAX_REASON_LENGTH)
 
         private fun JSONObject?.number(key: String): Double? =
             this?.optDouble(key)?.takeIf { it.isFinite() }
