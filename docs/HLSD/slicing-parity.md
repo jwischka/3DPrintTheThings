@@ -19,6 +19,22 @@ A baseline can capture successfully while remaining ineligible for comparison
 because it contains opaque printer macros. Successful desktop slicing means only
 the CLI produced a result; it is not a parity pass.
 
+`SET_VELOCITY_LIMIT` is parsed narrowly: only its documented numeric parameters
+are accepted, with Klipper's bounds, and every occurrence is retained as an
+ordered canonical parameter map. The sequence must match exactly. The current
+parameters and bounds follow the
+[Klipper command reference](https://www.klipper3d.org/G-Codes.html#toolhead).
+Unknown parameters, duplicate keys, malformed values, and all other bare macro
+commands remain unsupported. Historical Klipper v0.12 G-code that uses the removed
+`ACCEL_TO_DECEL` parameter requires `--legacy-klipper-accel-to-decel` on
+`inspect`, `capture`, or `compare`; the option labels output as structural
+comparison only and does not assert current firmware compatibility. The
+[Klipper v0.12 handler](https://github.com/Klipper3d/klipper/blob/v0.12.0/klippy/toolhead.py)
+accepted it; Klipper [removed it in 2025](https://www.klipper3d.org/Config_Changes.html),
+so default comparisons reject it. Compare the two raw G-code files after
+provenance validation so older JSON reports that lack
+the command sequence cannot mask a command mismatch.
+
 Run the dependency-free checks:
 
 ```text
@@ -48,7 +64,7 @@ since the JNI capture cannot independently report its engine source revision.
 
 A provenance match only establishes that both artifacts declare the same
 inputs and that metadata points to the supplied files. It is not a parity
-result and does not prove that a preset was applied. Run the unchanged strict
+result and does not prove that a preset was applied. Run the strict
 `parity.py compare` after the gate; exact configuration, structural metrics,
 Klipper metadata, and unknown-macro rejection remain in force. A
 `macro-free-diagnostic` capture is explicitly sanitized evidence and cannot be

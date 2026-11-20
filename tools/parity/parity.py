@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 
@@ -25,7 +26,53 @@ IMPORTANT_CONFIG_KEYS = (
 )
 
 
-def analyze(path: Path) -> dict:
+VELOCITY_LIMIT_KEYS = {
+    "VELOCITY", "ACCEL", "MINIMUM_CRUISE_RATIO", "SQUARE_CORNER_VELOCITY",
+    "ACCEL_TO_DECEL",
+}
+VELOCITY_LIMIT_NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
+
+
+def _parse_velocity_limit(command: str, allow_legacy_accel_to_decel: bool):
+    parts = command.split()
+    if not parts or parts[0] != "SET_VELOCITY_LIMIT":
+        return None, "invalid SET_VELOCITY_LIMIT command"
+    if len(parts) == 1:
+        return None, "SET_VELOCITY_LIMIT requires at least one parameter"
+    values = {}
+    for token in parts[1:]:
+        match = re.fullmatch(r"([A-Z_]+)=([^\s=]+)", token)
+        if not match:
+            return None, "malformed SET_VELOCITY_LIMIT parameter"
+        key, raw = match.groups()
+        if key == "ACCEL_TO_DECEL" and not allow_legacy_accel_to_decel:
+            return None, "SET_VELOCITY_LIMIT ACCEL_TO_DECEL requires legacy opt-in"
+        if key not in VELOCITY_LIMIT_KEYS:
+            return None, f"unknown SET_VELOCITY_LIMIT parameter {key}"
+        if key in values:
+            return None, f"duplicate SET_VELOCITY_LIMIT parameter {key}"
+        if not VELOCITY_LIMIT_NUMBER.fullmatch(raw):
+            return None, f"invalid numeric SET_VELOCITY_LIMIT parameter {key}"
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            return None, f"invalid numeric SET_VELOCITY_LIMIT parameter {key}"
+        if not value.is_finite():
+            return None, f"invalid numeric SET_VELOCITY_LIMIT parameter {key}"
+        if key in ("VELOCITY", "ACCEL", "ACCEL_TO_DECEL") and value <= 0:
+            return None, f"SET_VELOCITY_LIMIT {key} must be greater than zero"
+        if key == "SQUARE_CORNER_VELOCITY" and value < 0:
+            return None, "SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY must be nonnegative"
+        if key == "MINIMUM_CRUISE_RATIO" and not (Decimal("0") <= value < Decimal("1")):
+            return None, "SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO must be in [0, 1)"
+        canonical = "0" if value == 0 else format(value, "f")
+        if "." in canonical:
+            canonical = canonical.rstrip("0").rstrip(".")
+        values[key] = canonical or "0"
+    return dict(sorted(values.items())), None
+
+
+def analyze(path: Path, *, legacy_klipper_accel_to_decel: bool = False) -> dict:
     config: dict[str, str] = {}
     in_config = False
     config_starts = 0
@@ -44,6 +91,7 @@ def analyze(path: Path) -> dict:
     normal_estimated_seconds = None
     generic_estimated_seconds = None
     unsupported_commands: set[str] = set()
+    velocity_limit_commands = []
 
     for raw in iter_lines(path):
         line = raw.strip()
@@ -80,6 +128,13 @@ def analyze(path: Path) -> dict:
             continue
 
         command = upper.split(";", 1)[0].strip()
+        if re.match(r"^SET_VELOCITY_LIMIT(?:\s|$)", command):
+            parsed, error = _parse_velocity_limit(command, legacy_klipper_accel_to_decel)
+            if error:
+                unsupported_commands.add(error)
+            else:
+                velocity_limit_commands.append(parsed)
+            continue
         if command and not re.match(r"^(?:[GM]\d+|T\d+)(?=[A-Z\s]|$)", command):
             token = command.split(None, 1)[0]
             unsupported_commands.add(token[:80])
@@ -153,6 +208,8 @@ def analyze(path: Path) -> dict:
         "extrusion_mm_by_tool": {str(k): round(v, 4) for k, v in sorted(extrusion.items())},
         "duration_seconds": round(duration, 2) if duration is not None else None,
         "unsupported_commands": sorted(unsupported_commands),
+        "velocity_limit_commands": velocity_limit_commands,
+        "velocity_limit_legacy_mode": legacy_klipper_accel_to_decel,
     }
 
 
@@ -194,6 +251,24 @@ def compare(expected: dict, actual: dict, *, extrusion_abs_mm: float = 0.1,
     for key in ("layers", "tool_sequence"):
         if expected.get(key) != actual.get(key):
             errors.append(f"{key}: expected {expected.get(key)!r}, got {actual.get(key)!r}")
+    expected_velocity = expected.get("velocity_limit_commands", [])
+    actual_velocity = actual.get("velocity_limit_commands", [])
+    if not isinstance(expected_velocity, list) or not isinstance(actual_velocity, list):
+        errors.append("invalid SET_VELOCITY_LIMIT sequence metadata")
+    elif expected_velocity != actual_velocity:
+        left = expected_velocity
+        right = actual_velocity
+        mismatch = next((i for i, pair in enumerate(zip(left, right)) if pair[0] != pair[1]),
+                        min(len(left), len(right)))
+        left_command = left[mismatch] if mismatch < len(left) else "<missing>"
+        right_command = right[mismatch] if mismatch < len(right) else "<missing>"
+        errors.append(
+            f"SET_VELOCITY_LIMIT sequence differs ({len(left)} vs {len(right)} commands); "
+            f"first difference at index {mismatch}: {left_command!r} vs {right_command!r}")
+    expected_legacy = expected.get("velocity_limit_legacy_mode", False)
+    actual_legacy = actual.get("velocity_limit_legacy_mode", False)
+    if bool(expected_legacy) != bool(actual_legacy):
+        errors.append("SET_VELOCITY_LIMIT legacy comparison mode differs")
     tools = sorted(set(expected.get("extrusion_mm_by_tool", {})) |
                    set(actual.get("extrusion_mm_by_tool", {})))
     for tool in tools:
@@ -292,16 +367,21 @@ def validate_report(label: str, report: dict, *, reject_unsupported: bool = True
     extrusion = report.get("extrusion_mm_by_tool", {})
     if not extrusion or sum(extrusion.values()) <= 0:
         errors.append(f"{label}: missing positive extrusion data")
+    if "velocity_limit_commands" in report and not isinstance(report["velocity_limit_commands"], list):
+        errors.append(f"{label}: invalid SET_VELOCITY_LIMIT sequence metadata")
+    if ("velocity_limit_legacy_mode" in report and
+            not isinstance(report["velocity_limit_legacy_mode"], bool)):
+        errors.append(f"{label}: invalid SET_VELOCITY_LIMIT legacy mode metadata")
     unsupported = report.get("unsupported_commands", [])
     if reject_unsupported and unsupported:
         errors.append(f"{label}: unsupported commands: {', '.join(unsupported)}")
     return errors
 
 
-def load_report(path: Path) -> dict:
+def load_report(path: Path, *, legacy_klipper_accel_to_decel: bool = False) -> dict:
     if path.suffix.lower() == ".json":
         return json.loads(path.read_text(encoding="utf-8"))
-    return analyze(path)
+    return analyze(path, legacy_klipper_accel_to_decel=legacy_klipper_accel_to_decel)
 
 
 def main(argv=None) -> int:
@@ -309,6 +389,8 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     inspect_cmd = sub.add_parser("inspect", help="analyze one G-code file as JSON")
     inspect_cmd.add_argument("gcode", type=Path)
+    inspect_cmd.add_argument("--legacy-klipper-accel-to-decel", action="store_true",
+                             help="parse historical Klipper ACCEL_TO_DECEL; this does not establish current firmware compatibility")
     capture = sub.add_parser("capture", help="capture a desktop CLI G-code baseline and provenance")
     capture.add_argument("gcode", type=Path, help="G-code exported by the desktop Orca CLI")
     capture.add_argument("output", type=Path, help="JSON metrics output")
@@ -318,18 +400,25 @@ def main(argv=None) -> int:
                          help="machine/process/filament preset input; may be repeated")
     capture.add_argument("--input-sha256", required=True, help="SHA-256 of the sliced input model")
     capture.add_argument("--cli-command", required=True, help="CLI invocation used; omit local absolute paths")
+    capture.add_argument("--legacy-klipper-accel-to-decel", action="store_true",
+                         help="parse historical Klipper ACCEL_TO_DECEL; this does not establish current firmware compatibility")
     check = sub.add_parser("compare", help="compare G-code files or a captured JSON baseline")
     check.add_argument("expected", type=Path)
     check.add_argument("actual", type=Path)
     check.add_argument("--json", action="store_true")
     check.add_argument("--extrusion-abs-eps-mm", type=float, default=0.1)
     check.add_argument("--duration-abs-eps-seconds", type=float, default=1.0)
+    check.add_argument("--legacy-klipper-accel-to-decel", action="store_true",
+                       help="parse historical Klipper ACCEL_TO_DECEL; not a firmware compatibility claim")
     args = parser.parse_args(argv)
     if args.command == "inspect":
-        print(json.dumps(analyze(args.gcode), indent=2, sort_keys=True))
+        report = analyze(args.gcode, legacy_klipper_accel_to_decel=args.legacy_klipper_accel_to_decel)
+        if args.legacy_klipper_accel_to_decel:
+            report["comparison_notice"] = "LEGACY KLIPPER PARAMETER MODE: structural parsing only; not a firmware compatibility claim."
+        print(json.dumps(report, indent=2, sort_keys=True))
         return 0
     if args.command == "capture":
-        report = analyze(args.gcode)
+        report = analyze(args.gcode, legacy_klipper_accel_to_decel=args.legacy_klipper_accel_to_decel)
         capture_errors = validate_report("capture", report, reject_unsupported=False)
         if capture_errors:
             raise SystemExit("\n".join(capture_errors))
@@ -352,24 +441,38 @@ def main(argv=None) -> int:
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if args.legacy_klipper_accel_to_decel:
+            print("LEGACY KLIPPER PARAMETER MODE: structural capture only; not a firmware compatibility claim.")
         return 0
-    expected, actual = load_report(args.expected), load_report(args.actual)
+    expected = load_report(args.expected, legacy_klipper_accel_to_decel=args.legacy_klipper_accel_to_decel)
+    actual = load_report(args.actual, legacy_klipper_accel_to_decel=args.legacy_klipper_accel_to_decel)
     errors = compare(expected, actual,
                      extrusion_abs_mm=args.extrusion_abs_eps_mm,
                      duration_abs_seconds=args.duration_abs_eps_seconds)
     if args.json:
         expected_summary = {key: value for key, value in expected.items() if key != "config"}
         actual_summary = {key: value for key, value in actual.items() if key != "config"}
+        for summary in (expected_summary, actual_summary):
+            sequence = summary.get("velocity_limit_commands")
+            if isinstance(sequence, list):
+                summary["velocity_limit_commands"] = {
+                    "count": len(sequence), "first_commands": sequence[:8],
+                    "omitted_count": max(0, len(sequence) - 8),
+                }
         print(json.dumps({
             "expected": expected_summary,
             "actual": actual_summary,
             "config_diff": config_diff(expected.get("config", {}), actual.get("config", {})),
             "errors": errors,
+            "comparison_notice": ("LEGACY KLIPPER PARAMETER MODE: structural comparison only; "
+                                  "not a firmware compatibility claim." if args.legacy_klipper_accel_to_decel else None),
         }, indent=2))
     else:
         print("PARITY PASS" if not errors else "PARITY FAIL")
         for error in errors:
             print(f"- {error}")
+        if args.legacy_klipper_accel_to_decel:
+            print("LEGACY KLIPPER PARAMETER MODE: structural comparison only; not a firmware compatibility claim.")
     return 1 if errors else 0
 
 

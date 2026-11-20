@@ -13,6 +13,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class GcodeParityTest(unittest.TestCase):
+    @staticmethod
+    def velocity_gcode(commands):
+        return (
+            "; CONFIG_BLOCK_START\n; gcode_flavor = klipper\n; layer_height = 0.2\n; CONFIG_BLOCK_END\n"
+            ";LAYER_CHANGE\n; estimated printing time (normal mode) = 1m\n"
+            "M83\nG1 E5\n" + "\n".join(commands) + "\n"
+        )
+
     def test_config_mismatch_reports_compact_changed_missing_and_important_settings(self):
         expected = {
             "gcode_flavor": "klipper", "layer_height": "0.2",
@@ -208,6 +216,135 @@ class GcodeParityTest(unittest.TestCase):
         self.assertTrue(any("layer markers" in e for e in errors))
         self.assertTrue(any("duration" in e for e in errors))
         self.assertTrue(any("extrusion" in e for e in errors))
+
+    def test_velocity_limit_validates_supported_numeric_parameters_and_canonicalizes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "velocity.gcode"
+            path.write_text(self.velocity_gcode([
+                "SET_VELOCITY_LIMIT ACCEL=1000.000 SQUARE_CORNER_VELOCITY=5",
+                "SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=0.5 VELOCITY=200",
+            ]), encoding="utf-8")
+            report = analyze(path)
+        self.assertEqual(report["velocity_limit_commands"], [
+            {"ACCEL": "1000", "SQUARE_CORNER_VELOCITY": "5"},
+            {"MINIMUM_CRUISE_RATIO": "0.5", "VELOCITY": "200"},
+        ])
+        self.assertEqual(report["unsupported_commands"], [])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "zero-bounds.gcode"
+            path.write_text(self.velocity_gcode([
+                "SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=0 SQUARE_CORNER_VELOCITY=0",
+            ]), encoding="utf-8")
+            self.assertEqual(analyze(path)["unsupported_commands"], [])
+
+    def test_velocity_limit_rejects_invalid_bounds_duplicates_unknown_and_malformed(self):
+        cases = [
+            ("ACCEL=0", "must be greater than zero"),
+            ("VELOCITY=-1", "must be greater than zero"),
+            ("MINIMUM_CRUISE_RATIO=1", "must be in [0, 1)"),
+            ("SQUARE_CORNER_VELOCITY=-0.1", "must be nonnegative"),
+            ("ACCEL=1 ACCEL=2", "duplicate SET_VELOCITY_LIMIT parameter ACCEL"),
+            ("ACCEL=1 BOGUS=2", "unknown SET_VELOCITY_LIMIT parameter BOGUS"),
+            ("ACCEL=1e3", "invalid numeric SET_VELOCITY_LIMIT parameter ACCEL"),
+            ("ACCEL =1", "malformed SET_VELOCITY_LIMIT parameter"),
+        ]
+        for parameters, expected_error in cases:
+            with self.subTest(parameters=parameters), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "invalid-velocity.gcode"
+                path.write_text(self.velocity_gcode([f"SET_VELOCITY_LIMIT {parameters}"]), encoding="utf-8")
+                report = analyze(path)
+                self.assertTrue(any(expected_error in error for error in report["unsupported_commands"]))
+                self.assertEqual(report["velocity_limit_commands"], [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "empty-velocity.gcode"
+            path.write_text(self.velocity_gcode(["SET_VELOCITY_LIMIT"]), encoding="utf-8")
+            self.assertIn("requires at least one parameter", analyze(path)["unsupported_commands"][0])
+
+    def test_velocity_limit_sequence_is_ordered_repeated_and_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / f"{i}.gcode" for i in range(3)]
+            paths[0].write_text(self.velocity_gcode([
+                "SET_VELOCITY_LIMIT ACCEL=1000", "SET_VELOCITY_LIMIT ACCEL=2000",
+            ]), encoding="utf-8")
+            paths[1].write_text(self.velocity_gcode([
+                "SET_VELOCITY_LIMIT ACCEL=1000", "SET_VELOCITY_LIMIT ACCEL=2001",
+            ]), encoding="utf-8")
+            paths[2].write_text(self.velocity_gcode([
+                "SET_VELOCITY_LIMIT ACCEL=2000", "SET_VELOCITY_LIMIT ACCEL=1000",
+            ]), encoding="utf-8")
+            first, changed, reordered = map(analyze, paths)
+        for candidate, index in ((changed, 1), (reordered, 0)):
+            errors = compare(first, candidate)
+            self.assertTrue(any("sequence differs (2 vs 2 commands)" in error for error in errors))
+            self.assertTrue(any(f"first difference at index {index}" in error for error in errors))
+
+    def test_legacy_accel_to_decel_is_opt_in_and_labeled_by_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            left, right = Path(directory) / "left.gcode", Path(directory) / "right.gcode"
+            command = ["SET_VELOCITY_LIMIT ACCEL=1000 ACCEL_TO_DECEL=500"]
+            left.write_text(self.velocity_gcode(command), encoding="utf-8")
+            right.write_text(self.velocity_gcode(command), encoding="utf-8")
+            default_report = analyze(left)
+            self.assertTrue(any("requires legacy opt-in" in error
+                                for error in default_report["unsupported_commands"]))
+            opted = analyze(left, legacy_klipper_accel_to_decel=True)
+            self.assertEqual(opted["velocity_limit_commands"], [
+                {"ACCEL": "1000", "ACCEL_TO_DECEL": "500"}])
+            self.assertEqual(opted["unsupported_commands"], [])
+            right.write_text(self.velocity_gcode(["SET_VELOCITY_LIMIT ACCEL=1000 ACCEL_TO_DECEL=0"]),
+                             encoding="utf-8")
+            invalid_legacy = analyze(right, legacy_klipper_accel_to_decel=True)
+            self.assertTrue(any("ACCEL_TO_DECEL must be greater than zero" in error
+                                for error in invalid_legacy["unsupported_commands"]))
+
+            output = StringIO()
+            right.write_text(self.velocity_gcode(command), encoding="utf-8")
+            with redirect_stdout(output):
+                code = main(["compare", str(left), str(right), "--legacy-klipper-accel-to-decel"])
+            inspection = StringIO()
+            with redirect_stdout(inspection):
+                self.assertEqual(main(["inspect", str(left), "--legacy-klipper-accel-to-decel"]), 0)
+            inspected = json.loads(inspection.getvalue())
+            self.assertTrue(inspected["velocity_limit_legacy_mode"])
+            self.assertIn("not a firmware compatibility claim", inspected["comparison_notice"])
+        self.assertEqual(code, 0)
+        self.assertIn("LEGACY KLIPPER PARAMETER MODE", output.getvalue())
+        self.assertIn("not a firmware compatibility claim", output.getvalue())
+
+    def test_old_json_missing_velocity_sequence_cannot_match_raw_command_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = analyze(FIXTURES / "absolute.gcode")
+            old.pop("velocity_limit_commands")
+            old.pop("velocity_limit_legacy_mode")
+            json_path = Path(directory) / "old.json"
+            raw_path = Path(directory) / "candidate.gcode"
+            json_path.write_text(json.dumps(old), encoding="utf-8")
+            raw_path.write_text(self.velocity_gcode(["SET_VELOCITY_LIMIT ACCEL=500"]), encoding="utf-8")
+            errors = compare(load_report(json_path), analyze(raw_path))
+        self.assertTrue(any("sequence differs (0 vs 1 commands)" in error for error in errors))
+
+    def test_old_json_without_velocity_commands_can_match_raw_file_without_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = analyze(FIXTURES / "absolute.gcode")
+            old.pop("velocity_limit_commands")
+            old.pop("velocity_limit_legacy_mode")
+            json_path = Path(directory) / "old.json"
+            raw_path = Path(directory) / "candidate.gcode"
+            json_path.write_text(json.dumps(old), encoding="utf-8")
+            raw_path.write_bytes((FIXTURES / "absolute.gcode").read_bytes())
+            errors = compare(load_report(json_path), analyze(raw_path))
+        self.assertEqual(errors, [])
+
+    def test_legacy_opt_in_does_not_allow_unknown_printer_macros(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "macro.gcode"
+            path.write_text(self.velocity_gcode([
+                "SET_VELOCITY_LIMIT ACCEL=1000 ACCEL_TO_DECEL=500", "PRINT_START",
+            ]), encoding="utf-8")
+            report = analyze(path, legacy_klipper_accel_to_decel=True)
+        self.assertEqual(report["unsupported_commands"], ["PRINT_START"])
+        self.assertTrue(compare(report, report))
 
 
 if __name__ == "__main__":
