@@ -118,7 +118,7 @@ def prepare(source: Path, output: Path) -> dict:
             "layer_change_gcode": "",
             "time_lapse_gcode": "",
         },
-        "process": {"exclude_object": "0", "enable_timelapse": "0"},
+        "process": {"exclude_object": "0"},
         "filament": {"filament_start_gcode": [""], "filament_end_gcode": [""]},
     }
     diagnostic_refs: dict[str, str] = {}
