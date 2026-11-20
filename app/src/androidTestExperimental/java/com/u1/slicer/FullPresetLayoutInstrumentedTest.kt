@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -25,6 +26,7 @@ import java.io.File
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -83,7 +85,30 @@ class FullPresetLayoutInstrumentedTest {
                     captureRenderedPreview(stage)
                     checkSettings()
 
+                    stage = "layout-landscape-error-max-text"
+                    shell("settings --user current put system font_scale 2.0")
+                    waitForConfiguration(scenario, Configuration.ORIENTATION_LANDSCAPE, 2f)
+                    val invalidBundle = File(documents, "invalid.zip").apply { writeText("not a preset bundle") }
+                    val invalidBundleUri = documentUri(invalidBundle)
+                    val selection = requireNotNull(model.state.value.selection)
+                    scenario.onActivity { model.importBundle(invalidBundleUri) }
+                    idle(model)
+                    assertNotNull(model.state.value.error)
+                    assertEquals(selection, model.state.value.selection)
+                    reachControl("full-presets-error-details")
+                    captureRenderedPreview(stage)
+                    openSettings()
+                    compose.onNodeWithTag("full-presets-add-filament")
+                        .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+                    assertNull(model.state.value.error)
+                    compose.onNodeWithTag("full-presets-remove-filament")
+                        .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+                    assertEquals(selection, model.state.value.selection)
+                    control("full-presets-settings-done").performClick()
+                    reachControl("full-presets-slice")
+
                     stage = "layout-portrait-large-text"
+                    shell("settings --user current put system font_scale 1.5")
                     scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
                     waitForConfiguration(scenario, Configuration.ORIENTATION_PORTRAIT, 1.5f)
                     assertMainActions()
@@ -151,11 +176,15 @@ class FullPresetLayoutInstrumentedTest {
     }
 
     private fun checkSettings() {
-        compose.onNodeWithTag("full-presets-settings")
-            .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+        openSettings()
         compose.onNodeWithTag("full-presets-printer")
             .performScrollTo().assertIsDisplayed().assertIsEnabled()
         control("full-presets-settings-done").performClick()
+    }
+
+    private fun openSettings() {
+        compose.onNodeWithTag("full-presets-settings")
+            .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
     }
 
     private fun captureRenderedPreview(name: String) {
@@ -197,11 +226,21 @@ class FullPresetLayoutInstrumentedTest {
 
     private fun control(tag: String) = compose.onNodeWithTag(tag).assertIsDisplayed().assertIsEnabled()
 
+    private fun reachControl(tag: String) {
+        val node = compose.onNodeWithTag(tag)
+        if (!node.isDisplayed()) node.performScrollTo()
+        node.assertIsDisplayed().assertIsEnabled()
+    }
+
     private fun assetUri(directory: File, name: String): Uri {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val context = instrumentation.targetContext
         val file = File(directory, name)
         instrumentation.context.assets.open(name).use { input -> file.outputStream().use(input::copyTo) }
+        return documentUri(file)
+    }
+
+    private fun documentUri(file: File): Uri {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }
 

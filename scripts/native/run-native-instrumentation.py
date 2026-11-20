@@ -37,6 +37,7 @@ PRESET_UI_TEST = (
     "com.u1.slicer.FullPresetPreviewInstrumentedTest#rendersImportedStlAfterEglContextRecreation,"
     "com.u1.slicer.FullPresetPreviewInstrumentedTest#rendersModelWithProjectColorsAndKeepsItOnRejectedImport,"
     "com.u1.slicer.FullPresetPrinterInstrumentedTest#showsPrinterProgressCameraAndConnectionFailures,"
+    "com.u1.slicer.FullPresetPrinterInstrumentedTest#switchingConnectionIgnoresLateResponsesAndLeavingStopsPolling,"
     "com.u1.slicer.FullPresetLayoutInstrumentedTest#landscapeKeepsPreviewAndActionsReachableAtLargeText,"
     "com.u1.slicer.FullPresetPrinterLayoutInstrumentedTest#connectionEditorScrollsAboveKeyboardInLandscapeAtLargeText"
 )

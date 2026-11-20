@@ -1,21 +1,25 @@
 package com.u1.slicer
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.data.MoonrakerApiKeyStore
+import com.u1.slicer.ui.printer.experimental.ExperimentalPrinterConnection
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -23,6 +27,8 @@ import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -30,6 +36,9 @@ import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
@@ -135,6 +144,126 @@ class FullPresetPrinterInstrumentedTest {
         }
     }
 
+    @Test
+    fun switchingConnectionIgnoresLateResponsesAndLeavingStopsPolling() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = context.getSharedPreferences("experimental-printer", Context.MODE_PRIVATE)
+        val credentials = MoonrakerApiKeyStore(context.noBackupFilesDir)
+        val previousEndpoint = prefs.getString("endpoint", null)
+        val previousKey = previousEndpoint?.let { credentials.get(PRINTER_ID, it) }
+        val oldKey = "old-connection-fixture-key"
+        val originalJob = "Original connection job.gcode"
+        val lateJob = "Late reply from the original connection.gcode"
+        val newJob = "Replacement connection job.gcode"
+        val holdOriginal = AtomicBoolean(false)
+        val oldQueryInFlight = CountDownLatch(1)
+        val releaseOriginal = CountDownLatch(1)
+        val oldResponseReturned = CountDownLatch(1)
+        val heldRequest = AtomicReference<RecordedRequest>()
+        val leftPrinter = AtomicBoolean(false)
+        val requestAfterLeaving = CountDownLatch(1)
+        val jpeg = makeSnapshot()
+
+        try {
+            MockWebServer().use { original ->
+                MockWebServer().use { replacement ->
+                    val localhost = InetAddress.getByName("127.0.0.1")
+                    original.start(localhost, 0)
+                    replacement.start(localhost, 0)
+                    original.dispatcher = object : Dispatcher() {
+                        override fun dispatch(request: RecordedRequest): MockResponse {
+                            if (leftPrinter.get()) requestAfterLeaving.countDown()
+                            if (request.path?.substringBefore('?') != "/printer/objects/query") {
+                                return MockResponse().setResponseCode(404)
+                            }
+                            if (!holdOriginal.get()) return printStatus(originalJob)
+
+                            heldRequest.set(request)
+                            oldQueryInFlight.countDown()
+                            if (!releaseOriginal.await(15, TimeUnit.SECONDS)) {
+                                return MockResponse().setResponseCode(503)
+                            }
+                            oldResponseReturned.countDown()
+                            return printStatus(lateJob)
+                        }
+                    }
+                    replacement.dispatcher = object : Dispatcher() {
+                        override fun dispatch(request: RecordedRequest): MockResponse {
+                            if (leftPrinter.get()) requestAfterLeaving.countDown()
+                            return when (request.path?.substringBefore('?')) {
+                                "/printer/objects/query" -> printStatus(newJob)
+                                "/server/webcams/list" -> MockResponse().setBody(
+                                    """{"result":{"webcams":[{"snapshot_url":"${replacement.url("/snapshot.jpg")}"}]}}""",
+                                )
+                                "/snapshot.jpg" -> MockResponse().addHeader("Content-Type", "image/jpeg")
+                                    .setBody(Buffer().write(jpeg))
+                                else -> MockResponse().setResponseCode(404)
+                            }
+                        }
+                    }
+                    ExperimentalPrinterConnection(context).save(original.url("/").toString(), oldKey, false)
+
+                    try {
+                        ActivityScenario.launch(FullPresetActivity::class.java).use {
+                            compose.onNodeWithTag("full-presets-tab-printer").performClick()
+                            waitForText(originalJob)
+                            compose.onNodeWithTag("experimental-printer-edit").performScrollTo().performClick()
+                            compose.onNodeWithTag("experimental-printer-endpoint").performScrollTo()
+                                .performTextReplacement(replacement.url("/").toString())
+                            compose.onNodeWithTag("experimental-printer-save").performScrollTo().assertIsDisplayed()
+
+                            holdOriginal.set(true)
+                            assertTrue("No original status read was pending during the edit",
+                                oldQueryInFlight.await(5, TimeUnit.SECONDS))
+                            assertEquals(oldKey, requireNotNull(heldRequest.get()).getHeader("X-Api-Key"))
+                            compose.onNodeWithTag("experimental-printer-save").performClick()
+                            waitForText(newJob)
+                            val statusRequest = requireNotNull(replacement.takeRequest(2, TimeUnit.SECONDS))
+                            assertEquals("/printer/objects/query", statusRequest.path?.substringBefore('?'))
+                            assertNull("Old API key reached replacement endpoint", statusRequest.getHeader("X-Api-Key"))
+                            compose.onNodeWithText(originalJob).assertDoesNotExist()
+
+                            releaseOriginal.countDown()
+                            assertTrue("Original endpoint did not release its held reply",
+                                oldResponseReturned.await(2, TimeUnit.SECONDS))
+                            compose.waitUntil(20_000) {
+                                compose.onAllNodesWithTag("experimental-printer-camera-frame")
+                                    .fetchSemanticsNodes().isNotEmpty()
+                            }
+                            compose.onNodeWithText(lateJob).assertDoesNotExist()
+                            compose.onNodeWithText(newJob).assertIsDisplayed()
+
+                            compose.onNodeWithTag("full-presets-tab-prepare").performClick()
+                            compose.onNodeWithTag("experimental-printer-dashboard").assertDoesNotExist()
+                            leftPrinter.set(true)
+                            // Observe longer than the normal camera (5 s) and status (2 s) polling intervals.
+                            assertFalse("A printer request started after leaving the Printer tab",
+                                requestAfterLeaving.await(6, TimeUnit.SECONDS))
+                        }
+                    } finally {
+                        releaseOriginal.countDown()
+                    }
+                }
+            }
+        } finally {
+            try {
+                credentials.remove(PRINTER_ID)
+                if (previousEndpoint != null && previousKey != null) {
+                    credentials.put(PRINTER_ID, previousEndpoint, previousKey)
+                }
+            } finally {
+                assertTrue(prefs.edit().putString("endpoint", previousEndpoint).commit())
+            }
+        }
+    }
+
+    private fun waitForText(text: String) {
+        compose.waitUntil(20_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    private fun printStatus(filename: String) =
+        MockResponse().setBody(PRINTING.replace("Example bracket.gcode", filename))
+
     private fun makeSnapshot(): ByteArray {
         val image = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
         return try {
@@ -161,6 +290,7 @@ class FullPresetPrinterInstrumentedTest {
     private enum class Mode { PRINTING, AUTHORIZATION_REQUIRED, OFFLINE }
 
     private companion object {
+        const val PRINTER_ID = "experimental-printer-dashboard"
         const val PRINTING = """{"result":{"status":{
             "webhooks":{"state":"ready"},
             "print_stats":{"state":"printing","filename":"Example bracket.gcode","total_duration":128,

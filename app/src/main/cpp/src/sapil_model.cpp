@@ -109,29 +109,23 @@ static std::vector<std::vector<int>> parsePreviewExtrudersFromModelConfig(const 
 
     for (std::sregex_iterator object_it(xml.begin(), xml.end(), object_regex), end; object_it != end; ++object_it) {
         const std::string object_block = object_it->str();
+        const std::string object_metadata = std::regex_replace(object_block, part_regex, "");
+        std::smatch extruder_match;
+        const int object_extruder = std::regex_search(object_metadata, extruder_match, extruder_regex)
+            ? std::stoi(extruder_match[1].str()) : 0;
         std::vector<int> part_extruders;
 
         for (std::sregex_iterator part_it(object_block.begin(), object_block.end(), part_regex); part_it != end; ++part_it) {
             const std::string part_block = part_it->str();
-            std::smatch extruder_match;
-            if (std::regex_search(part_block, extruder_match, extruder_regex)) {
-                const int extruder = std::max(1, std::stoi(extruder_match[1].str()));
-                part_extruders.push_back(extruder);
-            }
+            const int part_extruder = std::regex_search(part_block, extruder_match, extruder_regex)
+                ? std::stoi(extruder_match[1].str()) : 0;
+            // Keep a slot per part. Zero leaves the loaded volume's tool in effect.
+            part_extruders.push_back(part_extruder > 0 ? part_extruder : object_extruder);
         }
 
-        if (!part_extruders.empty()) {
-            object_extruders.push_back(std::move(part_extruders));
-            continue;
-        }
-
-        std::string object_block_without_parts = std::regex_replace(object_block, part_regex, "");
-        std::smatch extruder_match;
-        if (std::regex_search(object_block_without_parts, extruder_match, extruder_regex)) {
-            object_extruders.push_back({ std::max(1, std::stoi(extruder_match[1].str())) });
-        } else {
-            object_extruders.emplace_back();
-        }
+        if (part_extruders.empty() && object_extruder > 0)
+            part_extruders.push_back(object_extruder);
+        object_extruders.push_back(std::move(part_extruders));
     }
 
     return object_extruders;

@@ -3,6 +3,7 @@ package com.u1.slicer.ui
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -115,34 +118,45 @@ private fun PrimaryAction(@StringRes label: Int, icon: ImageVector, tag: String,
 private fun OperationProgress(operation: FullPresetOperation, progress: Int?, onCancel: () -> Unit) {
     val cancellable = operation == FullPresetOperation.SLICING
     val cancelling = operation == FullPresetOperation.CANCELLING
-    Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            stringResource(operation.label),
-            modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
-            style = MaterialTheme.typography.titleSmall,
-        )
-        progress?.let {
-            val format = remember { NumberFormat.getPercentInstance() }
-            Text(format.format(it / 100.0), style = MaterialTheme.typography.labelLarge)
-        }
-        if (cancellable || cancelling) {
-            TextButton(
-                onClick = onCancel,
-                enabled = cancellable,
-                modifier = Modifier.testTag("full-presets-cancel").heightIn(min = 48.dp),
-            ) {
-                Text(stringResource(R.string.full_presets_cancel))
-            }
+    val showCancel = cancellable || cancelling
+    val cancelButton: @Composable () -> Unit = {
+        TextButton(
+            onClick = onCancel,
+            enabled = cancellable,
+            modifier = Modifier.testTag("full-presets-cancel").heightIn(min = 48.dp),
+        ) {
+            Text(stringResource(R.string.full_presets_cancel))
         }
     }
-    if (progress == null) {
-        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-    } else {
-        LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val separateCancel = showCancel && maxWidth < 150.dp * LocalDensity.current.fontScale
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(operation.label),
+                    modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                progress?.let {
+                    val locale = LocalConfiguration.current.locales[0]
+                    val format = remember(locale) { NumberFormat.getPercentInstance(locale) }
+                    Text(format.format(it / 100.0), style = MaterialTheme.typography.labelLarge)
+                }
+                if (showCancel && !separateCancel) cancelButton()
+            }
+            if (progress == null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
+            }
+            if (separateCancel) {
+                Box(Modifier.align(Alignment.End)) { cancelButton() }
+            }
+        }
     }
 }
 
@@ -150,30 +164,40 @@ private fun OperationProgress(operation: FullPresetOperation, progress: Int?, on
 private fun WorkflowError(notice: FullPresetNotice) {
     val message = stringResource(notice.message)
     var showDetail by remember(notice) { mutableStateOf(false) }
+    val detailsButton: @Composable () -> Unit = {
+        TextButton(
+            onClick = { showDetail = true },
+            modifier = Modifier.heightIn(min = 48.dp).testTag("full-presets-error-details"),
+        ) {
+            Text(stringResource(R.string.full_presets_error_details))
+        }
+    }
     Surface(
         modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
-            Text(
-                message,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            TextButton(
-                onClick = { showDetail = true },
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text(stringResource(R.string.full_presets_error_details))
+        BoxWithConstraints(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+            val separateDetails = maxWidth < 160.dp * LocalDensity.current.fontScale
+            Column {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
+                    Text(
+                        message,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!separateDetails) detailsButton()
+                }
+                if (separateDetails) {
+                    Box(Modifier.align(Alignment.End)) { detailsButton() }
+                }
             }
         }
     }

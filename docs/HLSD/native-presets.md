@@ -17,7 +17,9 @@ The Prepare tab brings together the imported model, print setup, and slice
 result. A settings sheet selects the bundle, printer, process, and ordered
 filament slots. The workspace stacks these panels on narrow displays and puts
 the model and setup side by side on wider displays. Navigation moves from a
-bottom bar to a side rail in landscape and wide windows. Model dimensions come
+bottom bar to a side rail in landscape and wide windows. Short windows keep
+actions and setup in one scrollable panel so large-text error messages cannot
+hide the settings needed for recovery. Model dimensions come
 from the preview bounds; slice time and material estimates come from the native
 result and remain absent when unavailable. Android's document picker handles
 preset import, model import, and G-code export.
@@ -35,7 +37,9 @@ extraction holds the native scene mutex while loading the file and copying
 render batches into Android-owned buffers. The native preview scene is released
 before the live model is cleared and the mutex is returned. These buffers
 preserve 3MF transforms and file-indexed filament colors and can be uploaded
-again after EGL context loss. The viewport fits the model and supports orbit,
+again after EGL context loss. Metadata fallback retains a slot for every part,
+including parts inheriting the object tool, to avoid shifting later assignments.
+The viewport fits the model and supports orbit,
 pan, and zoom. The imported preview retains its camera pose across tab switches
 and activity rotation, with zoom relative to the fitted viewport. Fit resets
 that pose; a new import starts fitted. A rejected replacement leaves the previous model available.

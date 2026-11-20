@@ -266,7 +266,7 @@ jobs:
             python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log native-slice-report/preset-ui-instrumentation.log --timeout 900 --device-diagnostics native-slice-report
             adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > native-slice-report/preset-ui-package-abi.txt
             grep -F 'primaryCpuAbi=${{ matrix.abi }}' native-slice-report/preset-ui-package-abi.txt
-            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
+            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text layout-landscape-error-max-text printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
       - name: Stop simulator and retain diagnostics
         if: always()
         run: |
@@ -350,7 +350,7 @@ jobs:
             python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log page-size-report/instrumentation.log --timeout 900 --device-diagnostics page-size-report
             adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > page-size-report/package-abi.txt
             grep -F 'primaryCpuAbi=x86_64' page-size-report/package-abi.txt
-            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "page-size-report/$name.png" || exit 1; done
+            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text layout-landscape-error-max-text printer-editor-keyboard printer-editor-actions-keyboard; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "page-size-report/$name.png" || exit 1; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -7,7 +7,7 @@ import unittest
 
 
 class PreviewExtruderMetadataTests(unittest.TestCase):
-    def test_declared_tools_survive_metadata_attribute_boundaries(self):
+    def test_declared_and_inherited_tools_match_metadata_parts(self):
         compiler = shutil.which("c++") or shutil.which("g++")
         if compiler is None:
             self.skipTest("Host C++ compiler unavailable; exercised in native Linux CI")
@@ -40,8 +40,23 @@ int main() {
         <metadata wrong_key="extruder" value="2"/>
         <metadata key="extruder" wrong_value="3"/>
       </part></object>)xml");
-    if (unrelated != std::vector<std::vector<int>>{{}}) {
+    if (unrelated != std::vector<std::vector<int>>{{0}}) {
         std::cerr << "Accepted an unrelated metadata attribute\n";
+        return 1;
+    }
+    const auto inherited = parsePreviewExtrudersFromModelConfig(R"xml(
+      <config><object id="1">
+        <metadata key="extruder" value="3"/>
+        <part id="1"><metadata key="name" value="Inherit"/></part>
+        <part id="2"><metadata key="extruder" value="2"/></part>
+        <part id="3"><metadata key="extruder" value="0"/></part>
+        <part id="4"><metadata key="name" value="Inherit"/></part>
+      </object><object id="2">
+        <part id="1"><metadata key="name" value="Use loaded tool"/></part>
+        <part id="2"><metadata key="extruder" value="4"/></part>
+      </object></config>)xml");
+    if (inherited != std::vector<std::vector<int>>{{3, 2, 3, 3}, {0, 4}}) {
+        std::cerr << "Missing or inherited tool shifted the part assignments\n";
         return 1;
     }
 }

@@ -76,6 +76,11 @@ internal fun PrepareWorkspace(
     BoxWithConstraints(Modifier.widthIn(max = 1120.dp).fillMaxSize()) {
         if (sideActions != null) {
             val compact = maxWidth < 640.dp
+            val short = maxHeight < 320.dp
+            val sidebarScroll = rememberScrollState()
+            val sidebarActions: @Composable () -> Unit = {
+                Surface(shape = panelShape, color = MaterialTheme.colorScheme.surface, content = sideActions)
+            }
             Row(
                 modifier = Modifier.fillMaxSize().padding(
                     horizontal = if (compact) 12.dp else 20.dp,
@@ -90,23 +95,29 @@ internal fun PrepareWorkspace(
                     viewportModifier = Modifier.weight(1f),
                 )
                 Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    modifier = Modifier.weight(1f).fillMaxHeight().then(
+                        if (short) Modifier.verticalScroll(sidebarScroll) else Modifier,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    if (short) sidebarActions()
                     Column(
-                        modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                        modifier = if (short) {
+                            Modifier.fillMaxWidth()
+                        } else {
+                            Modifier.weight(1f).verticalScroll(sidebarScroll)
+                        },
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         state.output?.let { SliceResultCard(it, state.operation == null, onSliceAgain, compact) }
                         PrintSetupCard(state, onOpenSettings, compact)
                     }
-                    Surface(shape = panelShape, color = MaterialTheme.colorScheme.surface) {
-                        sideActions()
-                    }
+                    if (!short) sidebarActions()
                 }
             }
         } else {
             val viewportHeight = (maxHeight * 0.63f).coerceIn(180.dp, 540.dp)
+                .coerceAtMost(maxHeight * 0.86f)
             val scrollState = rememberScrollState()
             val modelPath = state.model?.file?.absolutePath
             var lastModelPath by rememberSaveable { mutableStateOf(modelPath) }
