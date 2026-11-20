@@ -8,12 +8,13 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 namespace sapil {
 namespace {
 namespace fs = std::filesystem;
 using Json = nlohmann::json;
-struct Entry { std::string path, name, type, parent; Slic3r::DynamicPrintConfig own; };
+struct Entry { std::string path, name, type, parent, filament_id, setting_id, origin, instantiation; Slic3r::DynamicPrintConfig own; };
 
 fs::path confined_file(const fs::path& root, const std::string& relative) {
     fs::path rel(relative);
@@ -55,6 +56,13 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
         const int status = entry.own.load_from_json(full.string(), substitutions, false, metadata, reason);
         if (status != 0 || !reason.empty() || !substitutions.substitutions.empty() || !substitutions.unrecogized_keys.empty()) throw std::runtime_error("Invalid preset contents");
         entry.name = metadata["name"]; entry.type = metadata["type"]; entry.parent = metadata["inherits"];
+        entry.filament_id = metadata["filament_id"];
+        entry.setting_id = metadata["setting_id"];
+        entry.origin = metadata["from"];
+        entry.instantiation = metadata["instantiation"];
+        if (!entry.instantiation.empty() && entry.instantiation != "true" && entry.instantiation != "false")
+            throw std::runtime_error("Invalid preset instantiation");
+        if (entry.filament_id.empty() && entry.type == "filament" && entry.origin == "system") entry.filament_id = entry.setting_id;
         if (entry.name.empty() || (entry.type != "machine" && entry.type != "process" && entry.type != "filament")) throw std::runtime_error("Invalid preset identity");
         by_path.emplace(path, entry.name);
         if (!entries.emplace(entry.name, std::move(entry)).second) throw std::runtime_error("Duplicate preset name");
@@ -77,12 +85,27 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
         else if (type == "process") config = bundle.prints.default_preset().config;
         else config = bundle.filaments.default_preset().config;
         config.apply(found->second.own);
+        if (found->second.origin != "system") Slic3r::Preset::inherits(config) = found->second.parent;
+        if (found->second.instantiation != "false") {
+            Slic3r::Preset::normalize(config);
+            const auto& defaults = type == "machine" ? bundle.printers.default_preset_for(found->second.own).config :
+                type == "process" ? bundle.prints.default_preset().config : bundle.filaments.default_preset().config;
+            if (!Slic3r::Preset::remove_invalid_keys(config, defaults).empty())
+                throw std::runtime_error("Preset contains keys from another category");
+        }
         visiting.erase(name);
         result.resolved_inputs.push_back(found->second.path);
         return resolved.emplace(name, std::move(config)).first->second;
     };
     const auto& machine = resolve(by_path.at(printer), "machine");
     const auto& print = resolve(by_path.at(process), "process");
+    if (entries.at(by_path.at(printer)).instantiation == "false" || entries.at(by_path.at(process)).instantiation == "false")
+        throw std::runtime_error("Selected preset is not instantiable");
+    for (const auto& path : filaments) {
+        const auto& name = by_path.at(path);
+        if (entries.at(name).instantiation == "false") throw std::runtime_error("Selected preset is not instantiable");
+        resolve(name, "filament");
+    }
     const auto* nozzles = machine.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
     const auto* semm = machine.option<Slic3r::ConfigOptionBool>("single_extruder_multi_material");
     const auto* technology = machine.option<Slic3r::ConfigOptionEnumGeneric>("printer_technology");
@@ -100,16 +123,33 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
         if (index && (index->value < 0 || static_cast<size_t>(index->value) > filaments.size()))
             throw std::runtime_error("Preset references an unavailable filament");
     }
-    bundle.printers.load_preset("", by_path.at(printer), machine, true);
-    bundle.prints.load_preset("", by_path.at(process), print, true);
+    for (const auto& item : resolved) {
+        const auto& entry = entries.at(item.first);
+        if (entry.instantiation == "false") continue;
+        Slic3r::PresetCollection* collection = nullptr;
+        if (entry.type == "machine") collection = &bundle.printers;
+        else if (entry.type == "process") collection = &bundle.prints;
+        else collection = &bundle.filaments;
+        auto& preset = collection->load_preset("", entry.name, item.second, false);
+        preset.is_system = entry.origin == "system";
+        preset.setting_id = entry.setting_id;
+        const Entry* ancestor = &entry;
+        while (ancestor->filament_id.empty() && !ancestor->parent.empty()) ancestor = &entries.at(ancestor->parent);
+        preset.filament_id = ancestor->filament_id;
+        if (entry.type == "filament" && entry.origin == "system" && preset.filament_id.empty())
+            throw std::runtime_error("System filament has no filament identity");
+    }
+    bundle.printers.select_preset_by_name(by_path.at(printer), true);
+    bundle.prints.select_preset_by_name(by_path.at(process), true);
     bundle.filament_presets.clear();
     for (const auto& path : filaments) {
         const auto& name = by_path.at(path);
-        const auto& filament = resolve(name, "filament");
-        bundle.filaments.load_preset("", name, filament, bundle.filament_presets.empty());
+        if (bundle.filament_presets.empty()) bundle.filaments.select_preset_by_name(name, true);
         bundle.filament_presets.push_back(name);
     }
     result.config = bundle.full_config();
+    if (!result.config.validate(false).empty())
+        throw std::runtime_error("Invalid full preset configuration");
     return result;
 }
 }

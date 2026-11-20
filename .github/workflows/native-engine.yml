@@ -9,9 +9,13 @@ on:
       - 'scripts/native/prepare-emulator-apk.py'
       - 'scripts/native/run-native-instrumentation.py'
       - 'scripts/native/export-parity-capture.py'
+      - 'scripts/native/export-full-preset-capture.py'
+      - 'tools/parity/prepare_presets.py'
+      - 'tools/parity/provenance.py'
       - 'scripts/native/tests/**'
       - 'app/src/androidTest/java/com/u1/slicer/slicing/AndroidParityCaptureTest.kt'
       - 'app/src/androidTest/java/com/u1/slicer/slicing/NativeContractInstrumentedTest.kt'
+      - 'app/src/androidTest/java/com/u1/slicer/slicing/NativePresetInstrumentedTest.kt'
       - 'app/src/androidTest/java/com/u1/slicer/printer/DownloadSliceUploadInstrumentedTest.kt'
       - 'app/src/androidTest/java/com/u1/slicer/MainActivityWorkflowInstrumentedTest.kt'
       - 'tools/run-browser-instrumentation.py'
@@ -144,6 +148,20 @@ jobs:
           mkdir -p app/src/androidTest/assets
           cp tools/parity/fixtures/cube_10mm.stl app/src/androidTest/assets/cube_10mm.stl
           python3 -m unittest discover -s scripts/native/tests -v
+      - name: Prepare complete presets from the engine source pin
+        run: |
+          set -euo pipefail
+          pin=$(git ls-tree HEAD app/src/main/cpp/orcaslicer | awk '{print $3}')
+          source="$RUNNER_TEMP/preset-source"
+          git init -q "$source"
+          git -C "$source" remote add origin https://github.com/taylormadearmy/OrcaSlicer.git
+          git -C "$source" sparse-checkout init --cone
+          git -C "$source" sparse-checkout set resources/profiles/Snapmaker
+          git -C "$source" fetch --depth=1 --filter=blob:none origin "$pin"
+          git -C "$source" checkout --detach FETCH_HEAD
+          test "$(git -C "$source" rev-parse HEAD)" = "$pin"
+          python3 tools/parity/prepare_presets.py --source "$source" --output app/src/androidTest/assets/full-presets
+          printf '%s\n' "$pin" > app/src/androidTest/assets/full-presets/engine-source.txt
       - name: Build original test APKs
         run: >-
           ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --no-build-cache --max-workers=2
@@ -211,6 +229,9 @@ jobs:
             mkdir -p native-slice-report/screenshots
             for name in library prepare preview upload; do adb exec-out run-as io.github.jwischka.threedprintthethings cat "files/workflow-capture/$name.png" > "native-slice-report/screenshots/$name.png" || exit 1; done
             sha256sum native-slice-report/screenshots/*.png > native-slice-report/screenshots/sha256.txt
+            adb shell am force-stop io.github.jwischka.threedprintthethings
+            python3 scripts/native/run-native-instrumentation.py --suite presets --app "$RUNNER_TEMP/native-test/app-engine.apk" --test "$RUNNER_TEMP/native-test/test-engine.apk" --log native-slice-report/preset-instrumentation.log --timeout 900
+            python3 scripts/native/export-full-preset-capture.py --bundle app/src/androidTest/assets/full-presets --engine-pin "$(cat app/src/androidTest/assets/full-presets/engine-source.txt)" --output native-slice-report/presets
       - name: Stop simulator and retain diagnostics
         if: always()
         run: |

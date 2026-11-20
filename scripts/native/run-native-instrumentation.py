@@ -28,6 +28,15 @@ CORE_TESTS = (
     "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#truncatedFixtureCleansPartialAndNormalRetryPersists"
 )
 UI_TEST = "com.u1.slicer.MainActivityWorkflowInstrumentedTest#libraryOpenPrepareSlicePreviewAndUploadOnly"
+PRESET_TESTS = ",".join(
+    "com.u1.slicer.slicing.NativePresetInstrumentedTest#" + method
+    for method in (
+        "captureActualPinnedPreset", "captureDiagnosticPinnedPreset",
+        "invalidManifestBlocksSliceUntilReset", "childOverridesParentAndSliceConfigCannotOverrideIt",
+        "distinctFilamentChildrenPreserveSlotOrder", "invalidValuesAndTopologyFailClosed",
+        "fullPresetRejectsProjectInput", "wrongTypeTraversalAndCycleFailClosed",
+    )
+)
 GEOMETRY_TESTS = (
     "com.u1.slicer.slicing.SlicingIntegrationTest#setModelRotation_invalidatesPreviewMesh_soSubsequentFetchReturnsRotatedGeometry,"
     "com.u1.slicer.slicing.SlicingIntegrationTest#setModelRotation_sameValueSkips_cacheNotInvalidated,"
@@ -37,10 +46,11 @@ GEOMETRY_TESTS = (
     "com.u1.slicer.viewer.NativePreparePreviewTest#preparePreviewScene_duplicateReleaseIsRejected"
 )
 selection = argparse.ArgumentParser(add_help=False)
-selection.add_argument("--suite", choices=("core", "geometry", "ui", "all"), default="all")
+selection.add_argument("--suite", choices=("core", "geometry", "ui", "presets", "all"), default="all")
 options, remaining = selection.parse_known_args()
 runner.TEST_CLASS = {"core": CORE_TESTS, "geometry": GEOMETRY_TESTS, "ui": UI_TEST,
-                     "all": CORE_TESTS + "," + GEOMETRY_TESTS + "," + UI_TEST}[options.suite]
+                     "presets": PRESET_TESTS,
+                     "all": CORE_TESTS + "," + GEOMETRY_TESTS + "," + UI_TEST + "," + PRESET_TESTS}[options.suite]
 sys.argv = [sys.argv[0], *remaining]
 runner.EXPECTED_TESTS = len(runner.TEST_CLASS.split(","))
 sys.exit(runner.main())

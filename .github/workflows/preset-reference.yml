@@ -8,6 +8,8 @@ on:
       - 'scripts/native/build-host-reference.sh'
       - 'tools/parity/host/**'
       - 'tools/parity/prepare_presets.py'
+      - 'tools/parity/capture_reference.py'
+      - 'tools/parity/provenance.py'
       - 'app/src/main/cpp/src/sapil_presets.*'
 
 permissions:
@@ -48,6 +50,17 @@ jobs:
           set -o pipefail
           mkdir -p host-reference-report
           bash scripts/native/build-host-reference.sh 2>&1 | tee host-reference-report/build.log
+      - name: Capture unchanged U1 and explicitly sanitized diagnostic presets
+        env:
+          HOST_REFERENCE_DIR: ${{ runner.temp }}/host-reference
+        run: |
+          python3 tools/parity/prepare_presets.py --source "$HOST_REFERENCE_DIR/source" --output "$RUNNER_TEMP/full-presets"
+          python3 tools/parity/capture_reference.py \
+            --executable "$HOST_REFERENCE_DIR/output/preset-reference" \
+            --bundle "$RUNNER_TEMP/full-presets" --input tools/parity/fixtures/cube_10mm.stl \
+            --resources "$HOST_REFERENCE_DIR/source/resources" \
+            --engine-pin "$(cat "$HOST_REFERENCE_DIR/output/engine-source.txt")" \
+            --output "$HOST_REFERENCE_DIR/output/captures"
       - uses: actions/cache/save@v4
         if: always() && steps.pin.outcome == 'success'
         with:

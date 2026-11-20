@@ -27,6 +27,34 @@ python tools/parity/parity.py inspect candidate.gcode
 python tools/parity/parity.py compare tools/parity/baselines/case.json android.gcode
 ```
 
+Before comparing captures made through the native preset loader, bind their
+metadata to the exact artifacts with the provenance gate:
+
+```text
+python tools/parity/provenance.py desktop.json desktop.gcode android.json android.gcode
+python tools/parity/parity.py compare desktop.json android.gcode
+```
+
+The provenance gate requires schema version 1, a full engine source commit pin,
+matching input-model SHA-256, matching manifest schema/name/hash, the same
+hash map for the complete selected and inherited preset JSON closure, identical
+sanitization declarations, and matching effective CONFIG_BLOCK values. Each
+capture's nested `parityProvenance.gcodeSha256` is checked against the G-code
+file bytes before the pair can proceed. Preset closure hashes are supplied by
+the preset resolver; the gate validates their shape and pair equality, but
+cannot prove that a resolver included every file unless its resolved-input
+report is complete. The source pin is supplied by the build/CI invocation,
+since the JNI capture cannot independently report its engine source revision.
+
+A provenance match only establishes that both artifacts declare the same
+inputs and that metadata points to the supplied files. It is not a parity
+result and does not prove that a preset was applied. Run the unchanged strict
+`parity.py compare` after the gate; exact configuration, structural metrics,
+Klipper metadata, and unknown-macro rejection remain in force. A
+`macro-free-diagnostic` capture is explicitly sanitized evidence and cannot be
+presented as real U1 profile parity. Captures without complete provenance are
+not eligible for matched-preset comparison.
+
 The comparison command also accepts two G-code paths. Optional absolute
 epsilons are set with `--extrusion-abs-eps-mm` and
 `--duration-abs-eps-seconds`.

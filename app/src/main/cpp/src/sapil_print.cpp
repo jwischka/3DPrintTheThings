@@ -1906,6 +1906,9 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
             diagnostics_record_native_event("full_preset_loaded", event.dump());
             return true;
         } catch (const std::exception&) {
+            pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
+            pImpl->full_preset_filament_count = 0;
+            pImpl->preset_state = Impl::PresetState::Invalid;
             return false;
         }
     }

@@ -39,6 +39,7 @@ printf '%s\n' "$pin" > "$work/output/engine-source.txt"
 dpkg-query -W > "$work/output/host-packages.txt"
 cmake -S "$work/source" -B "$work/build" -G Ninja \
     -DPARITY_REPO="$repo" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PROJECT_Snapmaker_Orca_INCLUDE="$repo/tools/parity/host/dependencies.cmake" \
     -DCMAKE_PREFIX_PATH="$work/prefix" -DCMAKE_CXX_FLAGS_RELEASE='-O1 -DNDEBUG' \
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DSLIC3R_GUI=OFF -DSLIC3R_STATIC=OFF -DSLIC3R_PCH=OFF \
