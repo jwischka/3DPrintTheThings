@@ -98,55 +98,55 @@ class FullPresetPrinterInstrumentedTest {
                 }
 
                 ActivityScenario.launch(FullPresetActivity::class.java).use { scenario ->
-                    compose.onNodeWithTag("full-presets-tab-printer").performClick()
-                    waitFor("Monitor a printer")
-                    compose.onNodeWithTag("experimental-printer-connect").performClick()
-                    compose.onNodeWithTag("experimental-printer-endpoint").performTextInput(server.url("/").toString())
-                    compose.onNodeWithTag("experimental-printer-save").performClick()
-                    waitFor("Printing")
-                    compose.onNodeWithText("Example bracket.gcode").assertIsDisplayed()
-                    compose.onNodeWithText("72% complete").assertIsDisplayed()
-                    compose.onNodeWithText("Elapsed 2 min").assertIsDisplayed()
-                    compose.onNodeWithText("Remaining", substring = true).assertDoesNotExist()
-                    compose.waitUntil(20_000) {
-                        compose.onAllNodesWithText("Snapshot received at", substring = true)
-                            .fetchSemanticsNodes().isNotEmpty()
-                    }
-                    capture("printer-connected")
-                    compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
-                        .performClick()
-                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
-                    compose.onNodeWithTag("experimental-printer-expanded-camera-caption")
-                        .assertIsDisplayed().assertTextContains("Snapshot received at", substring = true)
-                    capture("printer-camera-expanded")
-                    rotateWhileCameraExpanded(scenario)
-                    compose.onNodeWithTag("experimental-printer-camera-close").assertIsDisplayed().performClick()
-                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertDoesNotExist()
-                    waitFor("Tool 3 · active")
-                    compose.onNodeWithText("Tool 3 · active").performScrollTo().assertIsDisplayed()
-                    compose.onNodeWithText("220.6 / 220 °C").assertIsDisplayed()
-                    capture("printer-temperatures")
-                    compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
+                    withFailureScreenshot("printer-monitoring-failure") {
+                        compose.onNodeWithTag("full-presets-tab-printer").performClick()
+                        waitFor("Monitor a printer")
+                        compose.onNodeWithTag("experimental-printer-connect").performClick()
+                        compose.onNodeWithTag("experimental-printer-endpoint").performTextInput(server.url("/").toString())
+                        compose.onNodeWithTag("experimental-printer-save").performClick()
+                        waitFor("Printing")
+                        compose.onNodeWithText("Example bracket.gcode").assertIsDisplayed()
+                        compose.onNodeWithText("72% complete").assertIsDisplayed()
+                        compose.onNodeWithText("Elapsed 2 min").assertIsDisplayed()
+                        compose.onNodeWithText("Remaining", substring = true).assertDoesNotExist()
+                        compose.waitUntil(20_000) {
+                            compose.onAllNodesWithText("Snapshot received at", substring = true)
+                                .fetchSemanticsNodes().isNotEmpty()
+                        }
+                        capture("printer-connected")
+                        compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
+                            .performClick()
+                        compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
+                        assertExpandedCameraCaption("Snapshot received at")
+                        capture("printer-camera-expanded")
+                        rotateWhileCameraExpanded(scenario)
+                        compose.onNodeWithTag("experimental-printer-camera-close").assertIsDisplayed().performClick()
+                        compose.onNodeWithTag("experimental-printer-camera-expanded").assertDoesNotExist()
+                        waitFor("Tool 3 · active")
+                        compose.onNodeWithText("Tool 3 · active").performScrollTo().assertIsDisplayed()
+                        compose.onNodeWithText("220.6 / 220 °C").assertIsDisplayed()
+                        capture("printer-temperatures")
+                        compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
 
-                    mode.set(Mode.AUTHORIZATION_REQUIRED)
-                    waitFor("Authorization required")
-                    compose.onNodeWithText("Showing last known values from", substring = true).assertIsDisplayed()
-                    mode.set(Mode.OFFLINE)
-                    compose.onNodeWithText("Retry now").performClick()
-                    waitFor("Printer offline")
-                    compose.onNodeWithText("Showing last known values from", substring = true).assertIsDisplayed()
-                    assertEquals(2, compose.onAllNodesWithText("Last known values at", substring = true)
-                        .fetchSemanticsNodes().size)
-                    capture("printer-offline")
-                    compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
-                        .performClick()
-                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
-                    compose.onNodeWithTag("experimental-printer-expanded-camera-caption")
-                        .assertIsDisplayed().assertTextContains("Last snapshot received at", substring = true)
-                    pressBack()
-                    compose.onNodeWithTag("experimental-printer-camera-expanded").assertDoesNotExist()
-                    compose.onNodeWithTag("experimental-printer-dashboard").assertIsDisplayed()
-                    assertTrue(requests.isNotEmpty() && requests.all { it.method == "GET" })
+                        mode.set(Mode.AUTHORIZATION_REQUIRED)
+                        waitFor("Authorization required")
+                        compose.onNodeWithText("Showing last known values from", substring = true).assertIsDisplayed()
+                        mode.set(Mode.OFFLINE)
+                        compose.onNodeWithText("Retry now").performClick()
+                        waitFor("Printer offline")
+                        compose.onNodeWithText("Showing last known values from", substring = true).assertIsDisplayed()
+                        assertEquals(2, compose.onAllNodesWithText("Last known values at", substring = true)
+                            .fetchSemanticsNodes().size)
+                        capture("printer-offline")
+                        compose.onNodeWithTag("experimental-printer-camera-frame").performScrollTo().assertIsDisplayed()
+                            .performClick()
+                        compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
+                        assertExpandedCameraCaption("Last snapshot received at")
+                        pressBack()
+                        compose.onNodeWithTag("experimental-printer-camera-expanded").assertDoesNotExist()
+                        compose.onNodeWithTag("experimental-printer-dashboard").assertIsDisplayed()
+                        assertTrue(requests.isNotEmpty() && requests.all { it.method == "GET" })
+                    }
                 }
             }
         } finally {
@@ -218,40 +218,42 @@ class FullPresetPrinterInstrumentedTest {
 
                     try {
                         ActivityScenario.launch(FullPresetActivity::class.java).use {
-                            compose.onNodeWithTag("full-presets-tab-printer").performClick()
-                            waitForText(originalJob)
-                            compose.onNodeWithTag("experimental-printer-edit").performScrollTo().performClick()
-                            compose.onNodeWithTag("experimental-printer-endpoint").performScrollTo()
-                                .performTextReplacement(replacement.url("/").toString())
-                            compose.onNodeWithTag("experimental-printer-save").performScrollTo().assertIsDisplayed()
+                            withFailureScreenshot("printer-switch-failure") {
+                                compose.onNodeWithTag("full-presets-tab-printer").performClick()
+                                waitForText(originalJob)
+                                compose.onNodeWithTag("experimental-printer-edit").performScrollTo().performClick()
+                                compose.onNodeWithTag("experimental-printer-endpoint").performScrollTo()
+                                    .performTextReplacement(replacement.url("/").toString())
+                                compose.onNodeWithTag("experimental-printer-save").performScrollTo().assertIsDisplayed()
 
-                            holdOriginal.set(true)
-                            assertTrue("No original status read was pending during the edit",
-                                oldQueryInFlight.await(5, TimeUnit.SECONDS))
-                            assertEquals(oldKey, requireNotNull(heldRequest.get()).getHeader("X-Api-Key"))
-                            compose.onNodeWithTag("experimental-printer-save").performClick()
-                            waitForText(newJob)
-                            val statusRequest = requireNotNull(replacement.takeRequest(2, TimeUnit.SECONDS))
-                            assertEquals("/printer/objects/query", statusRequest.path?.substringBefore('?'))
-                            assertNull("Old API key reached replacement endpoint", statusRequest.getHeader("X-Api-Key"))
-                            compose.onNodeWithText(originalJob).assertDoesNotExist()
+                                holdOriginal.set(true)
+                                compose.waitUntil(20_000) { oldQueryInFlight.count == 0L }
+                                assertEquals(oldKey, requireNotNull(heldRequest.get()).getHeader("X-Api-Key"))
+                                compose.onNodeWithTag("experimental-printer-save").performClick()
+                                waitForText(newJob)
+                                val statusRequest = requireNotNull(replacement.takeRequest(2, TimeUnit.SECONDS))
+                                assertEquals("/printer/objects/query", statusRequest.path?.substringBefore('?'))
+                                assertNull("Old API key reached replacement endpoint", statusRequest.getHeader("X-Api-Key"))
+                                compose.onNodeWithText(originalJob).assertDoesNotExist()
 
-                            releaseOriginal.countDown()
-                            assertTrue("Original endpoint did not release its held reply",
-                                oldResponseReturned.await(2, TimeUnit.SECONDS))
-                            compose.waitUntil(20_000) {
-                                compose.onAllNodesWithTag("experimental-printer-camera-frame")
-                                    .fetchSemanticsNodes().isNotEmpty()
+                                releaseOriginal.countDown()
+                                assertTrue("Original endpoint did not release its held reply",
+                                    oldResponseReturned.await(2, TimeUnit.SECONDS))
+                                compose.waitUntil(20_000) {
+                                    compose.onAllNodesWithTag("experimental-printer-camera-frame")
+                                        .fetchSemanticsNodes().isNotEmpty()
+                                }
+                                compose.onNodeWithText(lateJob).assertDoesNotExist()
+                                compose.onNodeWithText(newJob).assertIsDisplayed()
+
+                                compose.onNodeWithTag("full-presets-tab-prepare").performClick()
+                                compose.onNodeWithTag("experimental-printer-dashboard").assertDoesNotExist()
+                                leftPrinter.set(true)
+                                // Observe longer than the normal camera (5 s) and status (2 s) polling intervals.
+                                compose.mainClock.advanceTimeBy(6_000L)
+                                assertFalse("A printer request started after leaving the Printer tab",
+                                    requestAfterLeaving.await(6, TimeUnit.SECONDS))
                             }
-                            compose.onNodeWithText(lateJob).assertDoesNotExist()
-                            compose.onNodeWithText(newJob).assertIsDisplayed()
-
-                            compose.onNodeWithTag("full-presets-tab-prepare").performClick()
-                            compose.onNodeWithTag("experimental-printer-dashboard").assertDoesNotExist()
-                            leftPrinter.set(true)
-                            // Observe longer than the normal camera (5 s) and status (2 s) polling intervals.
-                            assertFalse("A printer request started after leaving the Printer tab",
-                                requestAfterLeaving.await(6, TimeUnit.SECONDS))
                         }
                     } finally {
                         releaseOriginal.countDown()
@@ -270,8 +272,23 @@ class FullPresetPrinterInstrumentedTest {
         }
     }
 
+    private inline fun withFailureScreenshot(name: String, action: () -> Unit) {
+        try {
+            action()
+        } catch (failure: Throwable) {
+            runCatching { saveFullPresetScreenshot(name) }.exceptionOrNull()?.let(failure::addSuppressed)
+            throw failure
+        }
+    }
+
     private fun waitForText(text: String) {
         compose.waitUntil(20_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    private fun assertExpandedCameraCaption(expected: String) {
+        val caption = compose.onNodeWithTag("experimental-printer-expanded-camera-caption")
+        compose.waitUntil(5_000) { runCatching { caption.assertIsDisplayed() }.isSuccess }
+        caption.assertIsDisplayed().assertTextContains(expected, substring = true)
     }
 
     private fun rotateWhileCameraExpanded(scenario: ActivityScenario<FullPresetActivity>) {
@@ -296,17 +313,25 @@ class FullPresetPrinterInstrumentedTest {
                 }
             }
             waitForOrientation(scenario, newOrientation)
-            compose.onNodeWithTag("experimental-printer-camera-close").assertIsDisplayed()
-            compose.waitUntil(20_000) {
-                compose.onAllNodesWithTag("experimental-printer-camera-expanded").fetchSemanticsNodes().isNotEmpty()
-            }
-            compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
+            assertRestoredExpandedCamera()
         } finally {
             if (scenario.state != Lifecycle.State.DESTROYED) {
                 scenario.onActivity { it.requestedOrientation = previousRequest }
             }
         }
         waitForOrientation(scenario, originalOrientation)
+        assertRestoredExpandedCamera()
+    }
+
+    private fun assertRestoredExpandedCamera() {
+        compose.waitUntil(20_000) {
+            compose.onAllNodesWithTag("experimental-printer-camera-close").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("experimental-printer-camera-close").assertIsDisplayed()
+        compose.waitUntil(20_000) {
+            compose.onAllNodesWithTag("experimental-printer-camera-expanded").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("experimental-printer-camera-expanded").assertIsDisplayed()
     }
 
     private fun waitForOrientation(scenario: ActivityScenario<FullPresetActivity>, orientation: Int) {
@@ -316,9 +341,6 @@ class FullPresetPrinterInstrumentedTest {
                 scenario.onActivity { matches = it.resources.configuration.orientation == orientation }
             }
             matches
-        }
-        compose.waitUntil(20_000) {
-            compose.onAllNodesWithTag("experimental-printer-camera-close").fetchSemanticsNodes().isNotEmpty()
         }
     }
 

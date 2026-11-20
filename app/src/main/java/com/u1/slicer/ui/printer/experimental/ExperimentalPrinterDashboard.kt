@@ -443,13 +443,6 @@ private fun ExpandedCamera(
                     }
                 }
                 if (image != null && caption != null) {
-                    Image(
-                        bitmap = image,
-                        contentDescription = stringResource(R.string.experimental_printer_snapshot),
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black)
-                            .testTag("experimental-printer-camera-expanded"),
-                    )
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -460,6 +453,13 @@ private fun ExpandedCamera(
                             Modifier.testTag("experimental-printer-expanded-camera-caption"),
                         )
                     }
+                    Image(
+                        bitmap = image,
+                        contentDescription = stringResource(R.string.experimental_printer_snapshot),
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black)
+                            .testTag("experimental-printer-camera-expanded"),
+                    )
                 } else {
                     Box(Modifier.fillMaxWidth().weight(1f).padding(16.dp), contentAlignment = Alignment.Center) {
                         Text(cameraStatus)

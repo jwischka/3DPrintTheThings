@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -77,6 +78,8 @@ internal fun PrepareWorkspace(
         if (sideActions != null) {
             val compact = maxWidth < 640.dp
             val short = maxHeight < 320.dp
+            val verticalPadding = if (maxHeight < 280.dp) 8.dp else 16.dp
+            val workspaceHeight = (maxHeight - verticalPadding * 2).coerceAtLeast(0.dp)
             val sidebarScroll = rememberScrollState()
             val sidebarActions: @Composable () -> Unit = {
                 Surface(shape = panelShape, color = MaterialTheme.colorScheme.surface, content = sideActions)
@@ -84,7 +87,7 @@ internal fun PrepareWorkspace(
             Row(
                 modifier = Modifier.fillMaxSize().padding(
                     horizontal = if (compact) 12.dp else 20.dp,
-                    vertical = if (maxHeight < 280.dp) 8.dp else 16.dp,
+                    vertical = verticalPadding,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 16.dp),
             ) {
@@ -93,6 +96,7 @@ internal fun PrepareWorkspace(
                     onImportModel = onImportModel,
                     modifier = Modifier.weight(1.45f).fillMaxHeight(),
                     viewportModifier = Modifier.weight(1f),
+                    metadataMaxHeight = if (short) workspaceHeight * (2f / 3f) else null,
                 )
                 Column(
                     modifier = Modifier.weight(1f).fillMaxHeight().then(
@@ -147,6 +151,7 @@ private fun ModelPanel(
     onImportModel: () -> Unit,
     viewportModifier: Modifier,
     modifier: Modifier = Modifier,
+    metadataMaxHeight: Dp? = null,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -162,37 +167,75 @@ private fun ModelPanel(
             }
             state.model?.let { model ->
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(
-                            model.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        (state.preview as? FullPresetPreview.Ready)?.let { ModelDimensions(it.mesh) }
-                    }
-                    TextButton(
-                        onClick = onImportModel,
-                        enabled = state.operation == null,
-                        modifier = Modifier.testTag("full-presets-import-model").heightIn(min = 48.dp),
-                    ) {
-                        Text(stringResource(R.string.full_presets_change_model))
-                    }
+                val metadataModifier = if (metadataMaxHeight == null) {
+                    Modifier
+                } else {
+                    Modifier.heightIn(max = metadataMaxHeight).verticalScroll(rememberScrollState())
                 }
+                ModelMetadata(
+                    name = model.name,
+                    mesh = (state.preview as? FullPresetPreview.Ready)?.mesh,
+                    replaceEnabled = state.operation == null,
+                    onReplace = onImportModel,
+                    modifier = metadataModifier,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ModelDimensions(mesh: MeshData) {
+private fun ModelMetadata(
+    name: String,
+    mesh: MeshData?,
+    replaceEnabled: Boolean,
+    onReplace: () -> Unit,
+    modifier: Modifier,
+) {
+    BoxWithConstraints(
+        modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+    ) {
+        val stacked = maxWidth < 208.dp * LocalDensity.current.fontScale
+        val label: @Composable (Modifier) -> Unit = { labelModifier ->
+            Column(labelModifier) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                mesh?.let { ModelDimensions(it, if (stacked) 2 else 1) }
+            }
+        }
+        val replaceButton: @Composable () -> Unit = {
+            TextButton(
+                onClick = onReplace,
+                enabled = replaceEnabled,
+                modifier = Modifier.testTag("full-presets-import-model").heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(R.string.full_presets_change_model))
+            }
+        }
+        if (stacked) {
+            Column(Modifier.fillMaxWidth()) {
+                label(Modifier.fillMaxWidth())
+                Box(Modifier.align(Alignment.End)) { replaceButton() }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                label(Modifier.weight(1f))
+                replaceButton()
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelDimensions(mesh: MeshData, lines: Int) {
     val sizes = listOf(mesh.sizeX, mesh.sizeY, mesh.sizeZ)
     if (sizes.any { !it.isFinite() || it < 0f }) return
 
@@ -214,7 +257,7 @@ private fun ModelDimensions(mesh: MeshData) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.testTag("full-presets-model-dimensions"),
-        maxLines = 1,
+        maxLines = lines,
         overflow = TextOverflow.Ellipsis,
     )
 }

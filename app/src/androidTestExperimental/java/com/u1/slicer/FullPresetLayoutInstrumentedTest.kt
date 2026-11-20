@@ -6,9 +6,12 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasText
@@ -19,6 +22,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.IntRect
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -33,6 +37,7 @@ import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -83,14 +88,14 @@ class FullPresetLayoutInstrumentedTest {
                     assertNull(model.state.value.error)
                     assertMainActions()
                     val baselineLineHeight = waitForHeadingLineHeight(1f)
-                    captureRenderedPreview(stage)
+                    val baselineGlyphHeight = captureRenderedPreview(stage)
 
                     stage = "layout-landscape-large-text"
                     shell("settings --user current put system font_scale 1.5")
                     waitForConfiguration(scenario, Configuration.ORIENTATION_LANDSCAPE, 1.5f)
                     assertMainActions()
                     val largeLineHeight = waitForHeadingLineHeight(1.5f, baselineLineHeight)
-                    captureRenderedPreview(stage)
+                    val largeGlyphHeight = captureRenderedPreview(stage, baselineGlyphHeight)
                     checkSettings()
 
                     stage = "layout-landscape-error-max-text"
@@ -105,7 +110,11 @@ class FullPresetLayoutInstrumentedTest {
                     assertNotNull(model.state.value.error)
                     assertEquals(selection, model.state.value.selection)
                     reachControl("full-presets-error-details")
-                    captureRenderedPreview(stage)
+                    val dimensions = requireNotNull(
+                        compose.onNodeWithTag("full-presets-model-dimensions").assertIsDisplayed().textLayout(),
+                    ) { "Expected dimensions for the imported 10 mm cube" }
+                    assertFalse("Cube dimensions are clipped at 200% text size", dimensions.hasVisualOverflow)
+                    captureRenderedPreview(stage, largeGlyphHeight)
                     openSettings()
                     compose.onNodeWithTag("full-presets-add-filament")
                         .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
@@ -122,7 +131,7 @@ class FullPresetLayoutInstrumentedTest {
                     waitForConfiguration(scenario, Configuration.ORIENTATION_PORTRAIT, 1.5f)
                     assertMainActions()
                     waitForHeadingLineHeight(1.5f, baselineLineHeight)
-                    captureRenderedPreview(stage)
+                    captureRenderedPreview(stage, baselineGlyphHeight)
                     checkSettings()
                     control("full-presets-slice").performClick()
                     idle(model)
@@ -185,21 +194,27 @@ class FullPresetLayoutInstrumentedTest {
         control("full-presets-slice")
     }
 
+    private fun prepareHeading() = InstrumentationRegistry.getInstrumentation().targetContext
+        .getString(R.string.full_presets_title).let { title ->
+            compose.onNode(hasText(title) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+        }
+
     private fun waitForHeadingLineHeight(fontScale: Float, largerThan: Float = 0f): Float {
-        val title = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.full_presets_title)
-        val heading = compose.onNode(
-            hasText(title) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading),
-        )
+        val heading = prepareHeading()
         var lineHeight = 0f
         compose.waitUntil(20_000) {
             if (!heading.isDisplayed()) return@waitUntil false
-            val layouts = mutableListOf<TextLayoutResult>()
-            heading.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            val layout = layouts.singleOrNull() ?: return@waitUntil false
+            val layout = heading.textLayout() ?: return@waitUntil false
             lineHeight = layout.getLineBottom(0) - layout.getLineTop(0)
             abs(layout.layoutInput.density.fontScale - fontScale) < 0.01f && lineHeight > largerThan
         }
         return lineHeight
+    }
+
+    private fun SemanticsNodeInteraction.textLayout(): TextLayoutResult? {
+        val layouts = mutableListOf<TextLayoutResult>()
+        performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        return layouts.singleOrNull()
     }
 
     private fun checkSettings() {
@@ -214,30 +229,83 @@ class FullPresetLayoutInstrumentedTest {
             .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
     }
 
-    private fun captureRenderedPreview(name: String) {
+    private fun captureRenderedPreview(name: String, largerThanGlyphHeight: Int = 0): Int {
         val viewport = compose.onNodeWithTag(PREVIEW_MODEL_SURFACE).assertIsDisplayed()
-        // Use composited screen pixels so a clipped or blank GL surface cannot satisfy the check.
-        compose.waitUntil(20_000) {
-            val bounds = viewport.fetchSemanticsNode().boundsInWindow
-            val bitmap = takeFullPresetScreenshot()
-            try {
-                val left = bounds.left.roundToInt().coerceIn(0, bitmap.width)
-                val top = bounds.top.roundToInt().coerceIn(0, bitmap.height)
-                val width = bounds.right.roundToInt().coerceIn(left, bitmap.width) - left
-                val height = bounds.bottom.roundToInt().coerceIn(top, bitmap.height) - top
-                if (width == 0 || height == 0) return@waitUntil false
-                val pixels = IntArray(width * height)
-                bitmap.getPixels(pixels, 0, width, left, top, width, height)
-                val modelPixels = pixels.count {
-                    val red = Color.red(it)
-                    Color.green(it) > 70 && Color.green(it) > red * 1.4f && Color.blue(it) > red * 1.4f
+        val heading = prepareHeading().assertIsDisplayed()
+        var glyphHeight = 0
+        var modelPixels = 0
+        var viewportPixels = 0
+        // Check the composited glyphs and rendered mesh in the same frame we save.
+        try {
+            compose.waitUntil(20_000) {
+                compose.waitForIdle()
+                val viewportBounds = viewport.fetchSemanticsNode().boundsInWindow
+                val headingBounds = heading.fetchSemanticsNode().boundsInWindow
+                val bitmap = takeFullPresetScreenshot()
+                try {
+                    glyphHeight = bitmap.headingGlyphHeight(headingBounds)
+                    val pixels = bitmap.pixelsIn(bitmap.screenRegion(viewportBounds))
+                    viewportPixels = pixels.size
+                    modelPixels = pixels.count {
+                        val red = Color.red(it)
+                        Color.green(it) > 70 && Color.green(it) > red * 1.4f && Color.blue(it) > red * 1.4f
+                    }
+                    if (glyphHeight <= largerThanGlyphHeight || modelPixels <= viewportPixels / 50) {
+                        return@waitUntil false
+                    }
+                    saveScreenshot(bitmap, name)
+                    true
+                } finally {
+                    bitmap.recycle()
                 }
-                if (modelPixels <= pixels.size / 50) return@waitUntil false
-                saveScreenshot(bitmap, name)
-                true
-            } finally {
-                bitmap.recycle()
             }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError(
+                "$name expected heading glyph height greater than $largerThanGlyphHeight px, " +
+                    "last frame measured $glyphHeight px and showed $modelPixels model-color pixels " +
+                    "across $viewportPixels viewport pixels.",
+                timeout,
+            )
+        }
+        return glyphHeight
+    }
+
+    private fun Bitmap.headingGlyphHeight(bounds: Rect): Int {
+        val region = screenRegion(bounds)
+        val pixels = pixelsIn(region)
+        var firstInkRow = -1
+        var lastInkRow = -1
+        for (row in 0 until region.height) {
+            var ink = 0
+            for (column in 0 until region.width) {
+                val color = pixels[row * region.width + column]
+                if (Color.red(color) < 100 && Color.green(color) < 100 && Color.blue(color) < 100) {
+                    ink++
+                }
+            }
+            if (ink >= 2) {
+                if (firstInkRow < 0) firstInkRow = row
+                lastInkRow = row
+            }
+        }
+        return if (firstInkRow < 0) 0 else lastInkRow - firstInkRow + 1
+    }
+
+    private fun Bitmap.screenRegion(bounds: Rect): IntRect {
+        val left = bounds.left.roundToInt().coerceIn(0, width)
+        val top = bounds.top.roundToInt().coerceIn(0, height)
+        return IntRect(
+            left,
+            top,
+            bounds.right.roundToInt().coerceIn(left, width),
+            bounds.bottom.roundToInt().coerceIn(top, height),
+        )
+    }
+
+    private fun Bitmap.pixelsIn(region: IntRect): IntArray {
+        if (region.width == 0 || region.height == 0) return IntArray(0)
+        return IntArray(region.width * region.height).also {
+            getPixels(it, 0, region.width, region.left, region.top, region.width, region.height)
         }
     }
 
