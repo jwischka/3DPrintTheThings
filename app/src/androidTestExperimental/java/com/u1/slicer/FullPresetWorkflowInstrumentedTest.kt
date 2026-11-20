@@ -43,6 +43,7 @@ class FullPresetWorkflowInstrumentedTest {
         val cube = asset("cube_10mm.stl")
         val invalid = uri(File(documents, "broken.zip").apply { writeText("not a preset bundle") })
         fun screenshot(name: String) {
+            compose.waitForIdle()
             val directory = File(context.filesDir, "preset-workflow-capture").apply { mkdirs() }
             val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
             try {
@@ -64,6 +65,7 @@ class FullPresetWorkflowInstrumentedTest {
                 idle()
                 noError()
                 assertNotNull("Slice completed without an exportable result", model.state.value.output)
+                compose.onNodeWithTag("full-presets-export").performScrollTo().assertIsEnabled()
             }
             idle()
             act { importBundle(actual) }
@@ -76,6 +78,7 @@ class FullPresetWorkflowInstrumentedTest {
             assertEquals(4, model.state.value.selection?.filaments?.size)
             act { importModel(cube) }
             noError()
+            compose.onNodeWithTag("full-presets-import-bundle").performScrollTo().assertIsEnabled()
             screenshot("selection")
             slice()
             screenshot("result")
