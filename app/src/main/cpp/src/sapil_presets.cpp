@@ -54,7 +54,9 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
         Slic3r::ConfigSubstitutionContext substitutions(Slic3r::ForwardCompatibilitySubstitutionRule::Disable);
         const auto full = confined_file(root, path);
         const int status = entry.own.load_from_json(full.string(), substitutions, false, metadata, reason);
-        if (status != 0 || !reason.empty() || !substitutions.substitutions.empty() || !substitutions.unrecogized_keys.empty()) throw std::runtime_error("Invalid preset contents");
+        if (status != 0 || !reason.empty()) throw std::runtime_error("Preset JSON parse failed");
+        if (!substitutions.substitutions.empty()) throw std::runtime_error("Preset substitutions rejected");
+        if (!substitutions.unrecogized_keys.empty()) throw std::runtime_error("Unknown preset keys");
         entry.name = metadata["name"]; entry.type = metadata["type"]; entry.parent = metadata["inherits"];
         entry.filament_id = metadata["filament_id"];
         entry.setting_id = metadata["setting_id"];

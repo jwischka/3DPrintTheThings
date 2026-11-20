@@ -1905,7 +1905,22 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
             };
             diagnostics_record_native_event("full_preset_loaded", event.dump());
             return true;
-        } catch (const std::exception&) {
+        } catch (const std::exception& error) {
+            const std::string reason = error.what();
+            const char* category = "unexpected";
+            for (const char* known : {"Invalid preset path", "Preset path escapes root", "Invalid preset file",
+                                      "Invalid preset manifest", "Unsupported preset manifest", "Invalid preset count",
+                                      "Preset JSON parse failed", "Preset substitutions rejected", "Unknown preset keys",
+                                      "Invalid preset identity", "Duplicate preset name",
+                                      "Missing or wrong-category preset parent", "Preset inheritance cycle",
+                                      "Invalid preset instantiation", "Preset contains keys from another category",
+                                      "Selected preset is not instantiable", "Unsupported preset extruder topology",
+                                      "Only FFF printer presets are supported", "Invalid nozzle diameter",
+                                      "Preset references an unavailable filament", "System filament has no filament identity",
+                                      "Invalid full preset configuration"}) {
+                if (reason == known) { category = known; break; }
+            }
+            SAPIL_LOGE("Full preset load failed: %s", category);
             pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
             pImpl->full_preset_filament_count = 0;
             pImpl->preset_state = Impl::PresetState::Invalid;
