@@ -110,6 +110,15 @@ android {
 
 }
 
+// AGP 8.2 does not page-align uncompressed APK libraries for 16 KiB devices.
+// Extract the single experimental JNI library; normal variants keep their packaging.
+androidComponents {
+    onVariants(selector().withBuildType('experimental')) { variant ->
+        variant.packaging.jniLibs.useLegacyPackaging.set(true)
+        variant.packaging.jniLibs.useLegacyPackagingFromBundle.set(true)
+    }
+}
+
 // Require an explicit, checksummed native build output. A normal build does not
 // consult this directory or change its shipped libraries.
 def verifyFullPresetEngine = tasks.register('verifyFullPresetEngine') {
@@ -130,7 +139,11 @@ def verifyFullPresetEngine = tasks.register('verifyFullPresetEngine') {
         if (!capability.isFile() || capability.text.trim() != 'orca-native-presets-v2') {
             throw new GradleException('Experimental builds require an engine built with geometry-only v2 preset support.')
         }
-        ['libprusaslicer-jni.so', 'libc++_shared.so', 'full-preset-schema.txt'].each { name ->
+        def runtime = new File(engine, 'cxx-runtime.txt')
+        if (!runtime.isFile() || runtime.text.trim() != 'c++_static' || new File(engine, 'libc++_shared.so').exists()) {
+            throw new GradleException('Experimental builds require a statically linked C++ runtime and no shared C++ library.')
+        }
+        ['libprusaslicer-jni.so', 'full-preset-schema.txt', 'cxx-runtime.txt'].each { name ->
             def library = new File(engine, name)
             if (!library.isFile()) throw new GradleException("Experimental engine is missing ${name}.")
             if (name.endsWith('.so')) {
@@ -164,7 +177,7 @@ def prepareFullPresetEngine = tasks.register('prepareFullPresetEngine', Sync) {
     dependsOn verifyFullPresetEngine
     into layout.buildDirectory.dir('fullPresetJni')
     from(providers.gradleProperty('fullPresetEngineDir').orElse('__missing_experimental_engine__')) {
-        include 'libprusaslicer-jni.so', 'libc++_shared.so'
+        include 'libprusaslicer-jni.so'
         into providers.gradleProperty('fullPresetAbi').orElse('arm64-v8a')
     }
 }

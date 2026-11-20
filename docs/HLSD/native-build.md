@@ -38,18 +38,19 @@ the experimental real-dependency build instead compiles the pinned fuzzy-skin
 implementation with libnoise. Geometry, support, Unicode and fuzzy-skin parity
 with the desktop engine remain unverified.
 
-The build checks ELF architecture, 16 KiB LOAD alignment for the new JNI
+The build checks ELF architecture, 16 KiB LOAD and RELRO alignment for the JNI
 library, the expected compiler version, and the exact 60 exported
 `Java_com_u1_slicer_NativeLibrary_` symbols against the shipped arm64 library.
-It records hashes of the engine, the NDK `libc++_shared.so`, and the v2 preset
-capability marker. The latter library's
-LOAD alignment is reported separately, so this workflow does not establish
-runtime compatibility with a 16 KiB page-size device.
+The experimental engine links the NDK C++ runtime statically because it is the
+app's only native shared library. This avoids distributing the NDK 26 shared
+runtime, which has 4 KiB LOAD alignment. Both maximum and common linker page sizes
+are 16 KiB. The build rejects non-platform dynamic dependencies and records hashes
+of the JNI library, the v2 preset capability marker, and `cxx-runtime.txt`.
 
 Each smoke job uses the engine artifact for its selected ABI. It builds ordinary debug
 and test APKs, creates a disposable app APK containing that experimental JNI
-library and NDK C++ runtime, and signs that APK and an isolated test APK with
-the same ephemeral debug key. Packaging checks both libraries' ELF architecture
+library, and signs that APK and an isolated test APK with
+the same ephemeral debug key. Packaging checks ELF architecture and page alignment
 and preserves the original APK hash. PackageManager's selected ABI is checked
 after installation. Linux x86_64 emulators run the x86 engine directly and the
 ARM64 engine through Android's native bridge. Both variants exercise STL and
@@ -86,10 +87,14 @@ help distinguish Android assertions from runner failures.
 
 The standalone Full Presets APK uses the `experimental` build type and application
 ID `io.github.jwischka.threedprintthethings.presets`. It requires a native build
-output directory containing both libraries, `full-preset-schema.txt`, and their
+output directory containing the JNI library, `full-preset-schema.txt`,
+`cxx-runtime.txt` declaring `c++_static`, and their
 `sha256.txt` receipt. Validation runs even when Gradle has cached the packaging
 steps. Missing files, an unsupported ABI, a missing v2 marker or mismatched
-checksums stop the build. Debug and Release retain the checked-in ARM64 libraries.
+checksums stop the build. A leftover shared C++ runtime is rejected. The
+experimental variant compresses its JNI entry so Android extracts it at install
+time; this avoids the uncompressed-library ZIP alignment limitation in AGP 8.2.
+Debug and Release retain the checked-in ARM64 libraries and their packaging.
 
 ```sh
 ./gradlew assembleExperimental -PfullPresetEngineDir=/absolute/native/output -PfullPresetAbi=arm64-v8a
@@ -102,6 +107,13 @@ export, and exercises failure recovery and stale-result invalidation. The test
 source set is enabled with `-PpresetInstrumentation=true`. Captured screenshots
 and test logs accompany the APK artifact. `tools/parity/package_presets.py`
 packages a prepared manifest and its exact preset files as an importable ZIP.
+
+A separate Android 15 x86_64 emulator job requires `getconf PAGE_SIZE` to return
+16384 and runs the standalone import, slice and export workflow. This exercises
+native code on 16 KiB pages in addition to the 4 KiB ABI smoke jobs. The APK
+verifier checks the ELF LOAD segments, RELRO boundary, dynamic dependencies and
+compressed or 16 KiB-aligned ZIP entry. Alignment checks alone do not establish
+runtime correctness. Physical device acceptance remains distinct from emulation.
 
 The shipping-engine probe installs the original ARM64 app and instrumentation
 APKs on a Google APIs x86_64 emulator with native-bridge support. It verifies
