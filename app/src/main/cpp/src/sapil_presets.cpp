@@ -16,6 +16,17 @@ namespace fs = std::filesystem;
 using Json = nlohmann::json;
 struct Entry { std::string path, name, type, parent, filament_id, setting_id, origin, instantiation; Slic3r::DynamicPrintConfig own; };
 
+// These pinned vendor fields are deliberately discarded by upstream legacy
+// conversion or belong to vendor presentation metadata rather than print config.
+// Do not silently accept any other unknown key.
+bool ignored_vendor_key(const std::string& type, const std::string& key) {
+    if (type == "filament") return key == "filament_load_time" || key == "filament_unload_time";
+    if (type == "machine") return key == "silent_mode" || key == "bed_model" || key == "bed_texture";
+    if (type == "process") return key == "adaptive_layer_height" || key == "overhang_totally_speed" ||
+        key == "smooth_coefficient" || key == "internal_bridge_support_thickness";
+    return false;
+}
+
 fs::path confined_file(const fs::path& root, const std::string& relative) {
     fs::path rel(relative);
     if (rel.empty() || rel.is_absolute() || rel.has_root_name() || relative.find(':') != std::string::npos || relative.find('\\') != std::string::npos)
@@ -56,7 +67,8 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
         const int status = entry.own.load_from_json(full.string(), substitutions, false, metadata, reason);
         if (status != 0 || !reason.empty()) throw std::runtime_error("Preset JSON parse failed");
         if (!substitutions.substitutions.empty()) throw std::runtime_error("Preset substitutions rejected");
-        if (!substitutions.unrecogized_keys.empty()) throw std::runtime_error("Unknown preset keys");
+        for (const auto& key : substitutions.unrecogized_keys)
+            if (!ignored_vendor_key(metadata["type"], key)) throw std::runtime_error("Unknown preset keys");
         entry.name = metadata["name"]; entry.type = metadata["type"]; entry.parent = metadata["inherits"];
         entry.filament_id = metadata["filament_id"];
         entry.setting_id = metadata["setting_id"];

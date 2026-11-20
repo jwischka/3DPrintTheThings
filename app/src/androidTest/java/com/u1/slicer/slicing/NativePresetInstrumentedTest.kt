@@ -255,6 +255,7 @@ class NativePresetInstrumentedTest {
         val processName = JSONObject(File(bundle, original.getString("process")).readText()).getString("name")
         val cases = listOf(
             Triple("negative-layer", "process", JSONObject().put("layer_height", "-0.1")),
+            Triple("unknown-option", "process", JSONObject().put("definitely_unknown_native_option", "1")),
             Triple("zero-nozzle", "machine", JSONObject().put("nozzle_diameter", JSONArray().put("0"))),
             Triple("nan-nozzle", "machine", JSONObject().put("nozzle_diameter", JSONArray().put("nan"))),
             Triple("sla", "machine", JSONObject().put("printer_technology", "SLA")),

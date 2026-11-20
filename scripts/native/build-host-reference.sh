@@ -21,6 +21,10 @@ fetch() {
     [[ $(git -C "$directory" rev-parse HEAD) == "$commit" ]]
 }
 fetch "$work/source" https://github.com/taylormadearmy/OrcaSlicer.git "$pin"
+# TreeSupport3D in this fork expects an external diagnostics header four levels
+# above its directory. Supply only that logging hook; core source stays untouched.
+mkdir -p "$work/src"
+cp "$repo/tools/parity/host/sapil_diagnostics.h" "$work/src/sapil_diagnostics.h"
 noise_pin=$(awk '$1 == "libnoise" {print $3}' "$repo/scripts/native/extra-sources.lock")
 fetch "$work/libnoise" https://github.com/SoftFever/Orca-deps-libnoise.git "$noise_pin"
 cmake -S "$work/libnoise" -B "$work/noise-build" -G Ninja \
@@ -36,6 +40,7 @@ fi
 mkdir -p "$work/output"
 git -C "$work/source" diff -- CMakeLists.txt > "$work/output/build-integration.patch"
 printf '%s\n' "$pin" > "$work/output/engine-source.txt"
+cp "$work/src/sapil_diagnostics.h" "$work/output/host-diagnostics.h"
 dpkg-query -W > "$work/output/host-packages.txt"
 cmake -S "$work/source" -B "$work/build" -G Ninja \
     -DPARITY_REPO="$repo" -DCMAKE_BUILD_TYPE=Release \

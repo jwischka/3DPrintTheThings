@@ -14,7 +14,10 @@ filament list to 16 entries; and the catalog to 128 entries. Files are interpret
 by the pinned Orca JSON configuration parser. Unknown options, substitutions,
 duplicate names, missing parents, category conflicts and inheritance cycles are
 errors. Custom settings are represented by derived preset files, preserving an
-explicit, hashable inheritance chain.
+explicit, hashable inheritance chain. A category-specific list permits nine
+retired or presentation-only fields present in the pinned U1 vendor files;
+upstream discards these fields too. The original JSON bytes remain in the input
+hashes. All other unknown fields are rejected, including misspelled settings.
 
 `sapil_presets.cpp` resolves each chain against the upstream defaults, normalizes
 instantiable presets, and composes their values through `PresetBundle::full_config`.
@@ -46,7 +49,9 @@ compare these captures.
 
 The Linux reference builds the pinned upstream core through its own CMake targets
 with real host dependencies. It does not use the Android dependency shims or JNI
-slicing pipeline. For unchanged vendor presets it independently loads the vendor
+slicing pipeline. The pinned fork's external tree-support diagnostic hook writes
+to standard error on the host; it cannot alter geometry or slicing decisions.
+For unchanged vendor presets it independently loads the vendor
 bundle through upstream's importer and requires exact configuration equality with
 the manifest loader before slicing. The explicitly sanitized diagnostic case uses
 derived presets with recorded macro changes; it cannot establish real-printer
