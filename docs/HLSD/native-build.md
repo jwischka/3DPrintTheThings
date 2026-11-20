@@ -76,7 +76,8 @@ The completed workflow retains Library, Prepare, Preview and upload confirmation
 screenshots from the actual app, with hashes alongside the test results.
 
 Separate app processes exercise the core native cases, geometry regressions,
-and full MainActivity workflow. Geometry cases cover preview rotation, repeated
+the full MainActivity workflow, and [full-preset loading](native-presets.md).
+Geometry cases cover preview rotation, repeated
 rotation stability, placement, scaling, triangle batches and scene-handle release.
 Every session requires every selected test to pass. A bounded host-side
 logcat tail survives emulator loss, while host memory and kernel diagnostics

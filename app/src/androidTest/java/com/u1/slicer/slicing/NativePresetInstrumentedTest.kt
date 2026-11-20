@@ -4,6 +4,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.NativeLibrary
 import com.u1.slicer.data.SliceConfig
+import com.u1.slicer.gcode.FeatureType
+import com.u1.slicer.gcode.GcodeParser
+import com.u1.slicer.gcode.MoveType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -98,7 +101,8 @@ class NativePresetInstrumentedTest {
         assertEquals("15%", parsed.getString("sparse_infill_density"))
         assertEquals(listOf("0.98", "0.98", "0.98", "0.98"),
             parsed.getString("filament_flow_ratio").split(',').map { it.trim() })
-        val filamentIds = parsed.getString("filament_ids").split(',').map { it.trim() }
+        // Orca ConfigOptionStrings serializes with semicolons, unlike numeric vectors.
+        val filamentIds = parsed.getString("filament_ids").split(';').map { it.trim() }
         assertEquals(4, filamentIds.size)
         assertTrue("Full preset lost filament identity", filamentIds.all { it.isNotEmpty() })
         assertEquals("Repeated selected filament must keep one identity", 1, filamentIds.toSet().size)
@@ -152,7 +156,7 @@ class NativePresetInstrumentedTest {
             val singleConfig = configBlock(File(single.gcodePath))
             assertEquals(4, singleConfig.getString("nozzle_diameter").split(',').size)
             assertEquals(1, singleConfig.getString("filament_flow_ratio").split(',').size)
-            assertEquals(1, singleConfig.getString("filament_ids").split(',').size)
+            assertEquals(1, singleConfig.getString("filament_ids").split(';').size)
         }
     }
 
@@ -196,6 +200,12 @@ class NativePresetInstrumentedTest {
     }
 
     @Test fun distinctFilamentChildrenPreserveSlotOrder() {
+        assertTrue("Second raw cube could not be added", native.addModel(cube.absolutePath))
+        assertEquals(2, native.nativeGetObjectCount())
+        assertTrue("Two cubes could not be positioned", native.setObjectPositions(
+            floatArrayOf(115f, 130f, 145f, 130f)))
+        assertTrue("First cube could not select filament A", native.nativeSetVolumeExtruder(0, 0, 1))
+        assertTrue("Second cube could not select filament B", native.nativeSetVolumeExtruder(1, 0, 2))
         val actual = JSONObject(File(bundle, "actual.json").readText())
         val parentPath = actual.getJSONArray("filaments").getString(0)
         val parentName = JSONObject(File(bundle, parentPath).readText()).getString("name")
@@ -221,6 +231,22 @@ class NativePresetInstrumentedTest {
             config.getString("filament_flow_ratio").split(',').map { it.trim() })
         assertEquals(listOf("223", "215", "223", "215"),
             config.getString("nozzle_temperature").split(',').map { it.trim() })
+        val parsed = GcodeParser.parse(File(result.gcodePath))
+        fun printedCube(xMin: Float, tool: Int): Boolean = parsed.layers.any { layer ->
+            layer.moves.any { move ->
+                move.type == MoveType.EXTRUDE && move.extruder == tool &&
+                    move.featureType != FeatureType.PRIME_TOWER &&
+                    move.x0 in (xMin - 0.5f)..(xMin + 10.5f) &&
+                    move.x1 in (xMin - 0.5f)..(xMin + 10.5f) &&
+                    move.y0 in 129.5f..140.5f && move.y1 in 129.5f..140.5f
+            }
+        }
+        assertTrue("Filament A did not print the first cube", printedCube(115f, 0))
+        assertTrue("Filament B did not print the second cube", printedCube(145f, 1))
+        assertTrue("Out-of-range model tool could not be set for validation",
+            native.nativeSetVolumeExtruder(1, 0, 5))
+        assertFalse("Full preset accepted a model tool beyond its four filaments",
+            native.slice(SliceConfig())?.success ?: true)
     }
 
     @Test fun invalidValuesAndTopologyFailClosed() {
