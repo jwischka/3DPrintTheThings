@@ -31,7 +31,8 @@ jobs:
             libocct-data-exchange-dev libocct-visualization-dev libocct-ocaf-dev \
             libcereal-dev libnlopt-cxx-dev libopencv-dev libssl-dev libcurl4-openssl-dev \
             libfreetype-dev libfontconfig-dev libpng-dev libjpeg-dev libexpat1-dev zlib1g-dev \
-            libglew-dev libglfw3-dev libdbus-1-dev libpango1.0-dev
+            libglew-dev libglfw3-dev libdbus-1-dev libpango1.0-dev \
+            libopenvdb-dev libblosc-dev libopenexr-dev
       - id: pin
         run: echo "sha=$(git ls-tree HEAD app/src/main/cpp/orcaslicer | awk '{print $3}')" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4

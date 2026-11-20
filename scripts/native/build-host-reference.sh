@@ -42,8 +42,7 @@ cmake -S "$work/source" -B "$work/build" -G Ninja \
     -DCMAKE_PREFIX_PATH="$work/prefix" -DCMAKE_CXX_FLAGS_RELEASE='-O1 -DNDEBUG' \
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DSLIC3R_GUI=OFF -DSLIC3R_STATIC=OFF -DSLIC3R_PCH=OFF \
-    -DSLIC3R_SENTRY=OFF -DBUILD_TESTS=OFF -DORCA_TOOLS=OFF \
-    -DCMAKE_DISABLE_FIND_PACKAGE_OpenVDB=ON
+    -DSLIC3R_SENTRY=OFF -DBUILD_TESTS=OFF -DORCA_TOOLS=OFF
 cmake --build "$work/build" --target preset-reference --parallel "$jobs"
 cp "$work/build/preset-reference" "$work/output/"
 sha256sum "$work/output/preset-reference" > "$work/output/reference-sha256.txt"
