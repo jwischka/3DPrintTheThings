@@ -103,7 +103,9 @@ static std::vector<std::vector<int>> parsePreviewExtrudersFromModelConfig(const 
     std::vector<std::vector<int>> object_extruders;
     const std::regex object_regex(R"cfg(<object\b[^>]*>[\s\S]*?</object>)cfg");
     const std::regex part_regex(R"cfg(<part\b[^>]*>[\s\S]*?</part>)cfg");
-    const std::regex extruder_regex(R"cfg(<metadata\b[^>]*key="extruder"\b[^>]*value="(\d+)")cfg");
+    // The closing quote is already a delimiter; a word boundary after it would
+    // reject the normal whitespace before the value attribute.
+    const std::regex extruder_regex(R"cfg(<metadata\b[^>]*\bkey="extruder"[^>]*\bvalue="(\d+)")cfg");
 
     for (std::sregex_iterator object_it(xml.begin(), xml.end(), object_regex), end; object_it != end; ++object_it) {
         const std::string object_block = object_it->str();

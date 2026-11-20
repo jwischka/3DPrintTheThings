@@ -51,6 +51,7 @@ class FullPresetLayoutInstrumentedTest {
             shell("settings --user current put system font_scale 1.0")
             ActivityScenario.launch(FullPresetActivity::class.java).use { scenario ->
                 var savedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                var stage = "layout-landscape"
                 try {
                     scenario.onActivity {
                         savedOrientation = it.requestedOrientation
@@ -73,24 +74,36 @@ class FullPresetLayoutInstrumentedTest {
                     idle(model)
                     assertNull(model.state.value.error)
                     assertMainActions()
-                    captureRenderedPreview("layout-landscape")
+                    captureRenderedPreview(stage)
 
+                    stage = "layout-landscape-large-text"
                     shell("settings --user current put system font_scale 1.5")
                     waitForConfiguration(scenario, Configuration.ORIENTATION_LANDSCAPE, 1.5f)
                     assertMainActions()
-                    captureRenderedPreview("layout-landscape-large-text")
+                    captureRenderedPreview(stage)
                     checkSettings()
 
+                    stage = "layout-portrait-large-text"
                     scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
                     waitForConfiguration(scenario, Configuration.ORIENTATION_PORTRAIT, 1.5f)
                     assertMainActions()
-                    captureRenderedPreview("layout-portrait-large-text")
+                    captureRenderedPreview(stage)
                     checkSettings()
                     control("full-presets-slice").performClick()
                     idle(model)
                     assertNull(model.state.value.error)
                     assertNotNull(model.state.value.output)
                     control("full-presets-export")
+                } catch (failure: Throwable) {
+                    runCatching {
+                        val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+                        try {
+                            saveScreenshot(bitmap, "$stage-failed-screen")
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }.exceptionOrNull()?.let(failure::addSuppressed)
+                    throw failure
                 } finally {
                     if (scenario.state != Lifecycle.State.DESTROYED) {
                         scenario.onActivity { it.requestedOrientation = savedOrientation }
@@ -147,8 +160,6 @@ class FullPresetLayoutInstrumentedTest {
 
     private fun captureRenderedPreview(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val directory = File(instrumentation.targetContext.filesDir, "preset-workflow-capture")
-        assertTrue(directory.isDirectory || directory.mkdirs())
         val viewport = compose.onNodeWithTag(PREVIEW_MODEL_SURFACE).assertIsDisplayed()
         // Use composited screen pixels so a clipped or blank GL surface cannot satisfy the check.
         compose.waitUntil(20_000) {
@@ -167,13 +178,20 @@ class FullPresetLayoutInstrumentedTest {
                     Color.green(it) > 70 && Color.green(it) > red * 1.4f && Color.blue(it) > red * 1.4f
                 }
                 if (modelPixels <= pixels.size / 50) return@waitUntil false
-                File(directory, "$name.png").outputStream().use {
-                    assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
-                }
+                saveScreenshot(bitmap, name)
                 true
             } finally {
                 bitmap.recycle()
             }
+        }
+    }
+
+    private fun saveScreenshot(bitmap: Bitmap, name: String) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.filesDir, "preset-workflow-capture")
+        assertTrue(directory.isDirectory || directory.mkdirs())
+        File(directory, "$name.png").outputStream().use {
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
         }
     }
 

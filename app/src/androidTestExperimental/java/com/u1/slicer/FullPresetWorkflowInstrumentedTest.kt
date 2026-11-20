@@ -86,6 +86,7 @@ class FullPresetWorkflowInstrumentedTest {
             assertEquals(4, model.state.value.selection?.filaments?.size)
             act { importModel(cube) }
             noError()
+            compose.onNodeWithTag("full-presets-model-dimensions").assertExists()
             screenshot("selection")
             openSettings()
             screenshot("settings")
@@ -96,6 +97,10 @@ class FullPresetWorkflowInstrumentedTest {
             screenshot("result")
             val firstResult = requireNotNull(model.state.value.output).result
             assertEquals(50, firstResult.totalLayers)
+            assertTrue(firstResult.estimatedTimeSeconds.isFinite() && firstResult.estimatedTimeSeconds > 0f)
+            assertTrue(firstResult.estimatedFilamentMm.isFinite() && firstResult.estimatedFilamentMm > 0f)
+            compose.onNodeWithTag("full-presets-estimated-time").assertExists()
+            compose.onNodeWithTag("full-presets-estimated-filament").assertExists()
             val bytes = File(firstResult.gcodePath).readBytes()
             assertTrue(bytes.toString(Charsets.UTF_8).contains("; layer_height = 0.2"))
             val exported = File(documents, "exported.gcode")

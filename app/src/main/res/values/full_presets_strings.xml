@@ -19,11 +19,15 @@
     <string name="full_presets_supported_models">Choose an STL or single-plate 3MF.</string>
     <string name="full_presets_import_model">Import model</string>
     <string name="full_presets_change_model">Replace model</string>
+    <!-- X, Y, and Z bounds. The final value already includes the localized unit. -->
+    <string name="full_presets_model_dimensions">%1$s × %2$s × %3$s</string>
     <string name="full_presets_import_presets">Import presets</string>
     <string name="full_presets_slice">Slice model</string>
     <string name="full_presets_slice_again">Slice again</string>
     <string name="full_presets_cancel">Cancel</string>
     <string name="full_presets_export">Export G-code</string>
+    <string name="full_presets_estimated_time">Estimated time · %1$s</string>
+    <string name="full_presets_estimated_filament">Estimated filament · %1$s</string>
     <string name="full_presets_reading_bundles">Reading preset bundles…</string>
     <string name="full_presets_importing_bundle">Importing preset bundle…</string>
     <string name="full_presets_importing_model">Importing model…</string>

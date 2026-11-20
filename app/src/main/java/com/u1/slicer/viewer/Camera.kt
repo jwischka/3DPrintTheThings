@@ -26,6 +26,8 @@ data class CameraViewState(
     val targetZ: Double
 )
 
+internal data class ModelCameraPose(val view: CameraViewState, val fitDistance: Double)
+
 class Camera {
     @Volatile var azimuth = -45.0       // horizontal rotation (degrees)
     @Volatile var elevation = 45.0      // vertical rotation (degrees, 0=horizon, 90=top-down)
@@ -42,6 +44,7 @@ class Camera {
     val normalMatrix = FloatArray(16)
     private val tempMatrix = FloatArray(16)
     @Volatile private var zoomRange = 10.0..2000.0
+    @Volatile private var fittedModelDistance: Double? = null
 
     fun setTarget(x: Double, y: Double, z: Double) {
         targetX = x; targetY = y; targetZ = z
@@ -78,7 +81,10 @@ class Camera {
         distance = (distance * factor).coerceIn(zoomRange)
     }
 
-    internal fun fitModel(mesh: MeshData, width: Int, height: Int) {
+    internal fun modelPose(view: CameraViewState = snapshot()): ModelCameraPose? =
+        fittedModelDistance?.let { ModelCameraPose(view, it) }
+
+    internal fun fitModel(mesh: MeshData, width: Int, height: Int, pose: ModelCameraPose? = null) {
         val radius = sqrt(
             mesh.sizeX.toDouble() * mesh.sizeX +
                 mesh.sizeY.toDouble() * mesh.sizeY +
@@ -88,18 +94,20 @@ class Camera {
         val limitingFov = atan(tan(halfFov) * minOf(1.0, width.toDouble() / height))
         val fittedDistance = (radius / sin(limitingFov) * 1.10).coerceAtLeast(2.0)
         zoomRange = maxOf(1.5, fittedDistance / 8.0)..(fittedDistance * 10.0)
-        restore(
-            CameraViewState(
-                azimuth = -45.0,
-                elevation = 32.0,
-                distance = fittedDistance,
-                panX = 0.0,
-                panY = 0.0,
-                targetX = mesh.centerX.toDouble(),
-                targetY = mesh.centerY.toDouble(),
-                targetZ = mesh.centerZ.toDouble(),
-            ),
+        val fit = CameraViewState(
+            azimuth = -45.0,
+            elevation = 32.0,
+            distance = fittedDistance,
+            panX = 0.0,
+            panY = 0.0,
+            targetX = mesh.centerX.toDouble(),
+            targetY = mesh.centerY.toDouble(),
+            targetZ = mesh.centerZ.toDouble(),
         )
+        restore(pose?.let {
+            it.view.copy(distance = (it.view.distance / it.fitDistance * fittedDistance).coerceIn(zoomRange))
+        } ?: fit)
+        fittedModelDistance = fittedDistance
     }
 
     fun pan(dx: Double, dy: Double) {

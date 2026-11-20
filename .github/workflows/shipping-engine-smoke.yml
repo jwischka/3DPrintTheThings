@@ -87,6 +87,9 @@ jobs:
           emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            # Isolate tests from Play Services font-provider restarts on the disposable emulator.
+            adb shell pm disable-user --user 0 com.google.android.gms
+            adb shell pm list packages -d --user 0 | tr -d '\r' | grep -Fx 'package:com.google.android.gms'
             python3 scripts/native/run-shipping-instrumentation.py --app app/build/outputs/apk/debug/app-debug.apk --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk --report-dir shipping-smoke-report/device --timeout 900
             python3 scripts/native/export-parity-capture.py --output shipping-smoke-report/cube
             python3 tools/parity/parity.py inspect shipping-smoke-report/cube/cube_10mm.android.gcode > shipping-smoke-report/cube/metrics.json

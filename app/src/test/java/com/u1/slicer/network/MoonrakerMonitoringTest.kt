@@ -158,6 +158,39 @@ class MoonrakerMonitoringTest {
         }
     }
 
+    @Test
+    fun workingWebcamReplacesStoredFallbackAfterDiscoveryCooldown() = runBlocking {
+        server().use { server ->
+            val webcam = server.url("/snapshot.jpg")
+            val list = """{"result":{"webcams":[{"snapshot_url":"$webcam"}]}}"""
+            server.enqueue(MockResponse().setBody(list))
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setBody("stored"))
+            server.enqueue(MockResponse().setBody("stored"))
+            server.enqueue(MockResponse().setBody(list))
+            server.enqueue(MockResponse().setBody("webcam"))
+            server.enqueue(MockResponse().setBody("webcam"))
+            var elapsed = 0L
+            val reader = ExperimentalCameraReader(server.client()) { elapsed }
+            val storedFrame = ExperimentalCameraReader.Frame("stored", isStoredMonitorFile = true)
+            val webcamFrame = ExperimentalCameraReader.Frame("webcam", isStoredMonitorFile = false)
+
+            assertEquals(storedFrame, reader.nextFrame { it.decodeToString() })
+            elapsed = 5_000L
+            assertEquals(storedFrame, reader.nextFrame { it.decodeToString() })
+            elapsed = 15_000L
+            assertEquals(webcamFrame, reader.nextFrame { it.decodeToString() })
+            elapsed = 30_000L
+            assertEquals(webcamFrame, reader.nextFrame { it.decodeToString() })
+
+            assertEquals(
+                listOf("/server/webcams/list", "/snapshot.jpg", "/server/files/camera/monitor.jpg",
+                    "/server/files/camera/monitor.jpg", "/server/webcams/list", "/snapshot.jpg", "/snapshot.jpg"),
+                List(7) { requireNotNull(server.takeRequest(2, TimeUnit.SECONDS)).path },
+            )
+        }
+    }
+
     private fun server() = MockWebServer().also { it.start(InetAddress.getByName("127.0.0.1"), 0) }
 
     private fun MockWebServer.client(http: OkHttpClient = OkHttpClient()) =

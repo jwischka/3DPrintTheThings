@@ -223,6 +223,9 @@ class ModelRenderer(
     @Volatile
     var pendingCameraState: CameraViewState? = null
 
+    @Volatile
+    internal var pendingModelCameraPose: ModelCameraPose? = null
+
     override fun onDrawFrame(gl: GL10?) = synchronized(meshOwnershipLock) {
         pendingBedSizeMm?.let { (requestedWidth, requestedDepth) ->
             pendingBedSizeMm = null
@@ -354,7 +357,11 @@ class ModelRenderer(
                     camera.panX = 0.0
                     camera.panY = 0.0
                 } else {
-                    camera.fitModel(mesh, viewportWidth.coerceAtLeast(1), viewportHeight.coerceAtLeast(1))
+                    camera.fitModel(
+                        mesh, viewportWidth.coerceAtLeast(1), viewportHeight.coerceAtLeast(1),
+                        pendingModelCameraPose,
+                    )
+                    pendingModelCameraPose = null
                 }
             }
         }

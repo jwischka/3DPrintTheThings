@@ -1,5 +1,9 @@
 package com.u1.slicer.ui
 
+import android.icu.text.MeasureFormat
+import android.icu.text.NumberFormat
+import android.icu.util.Measure
+import android.icu.util.MeasureUnit
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -50,10 +55,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.R
+import com.u1.slicer.data.SliceResult
 import com.u1.slicer.presets.FullPresetOutput
 import com.u1.slicer.presets.FullPresetUiState
 import com.u1.slicer.presets.preview.FullPresetModelPreview
 import com.u1.slicer.presets.preview.FullPresetPreview
+import com.u1.slicer.viewer.MeshData
+import kotlin.math.roundToLong
 
 private val panelShape = RoundedCornerShape(22.dp)
 
@@ -67,9 +75,13 @@ internal fun PrepareWorkspace(
 ) {
     BoxWithConstraints(Modifier.widthIn(max = 1120.dp).fillMaxSize()) {
         if (sideActions != null) {
+            val compact = maxWidth < 640.dp
             Row(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxSize().padding(
+                    horizontal = if (compact) 12.dp else 20.dp,
+                    vertical = if (maxHeight < 280.dp) 8.dp else 16.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 16.dp),
             ) {
                 ModelPanel(
                     state = state,
@@ -85,8 +97,8 @@ internal fun PrepareWorkspace(
                         modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        state.output?.let { SliceResultCard(it, state.operation == null, onSliceAgain) }
-                        PrintSetupCard(state, onOpenSettings)
+                        state.output?.let { SliceResultCard(it, state.operation == null, onSliceAgain, compact) }
+                        PrintSetupCard(state, onOpenSettings, compact)
                     }
                     Surface(shape = panelShape, color = MaterialTheme.colorScheme.surface) {
                         sideActions()
@@ -144,13 +156,17 @@ private fun ModelPanel(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        model.name,
+                    Column(
                         modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    ) {
+                        Text(
+                            model.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        (state.preview as? FullPresetPreview.Ready)?.let { ModelDimensions(it.mesh) }
+                    }
                     TextButton(
                         onClick = onImportModel,
                         enabled = state.operation == null,
@@ -162,6 +178,34 @@ private fun ModelPanel(
             }
         }
     }
+}
+
+@Composable
+private fun ModelDimensions(mesh: MeshData) {
+    val sizes = listOf(mesh.sizeX, mesh.sizeY, mesh.sizeZ)
+    if (sizes.any { !it.isFinite() || it < 0f }) return
+
+    val locale = LocalConfiguration.current.locales[0]
+    val number = remember(locale) {
+        NumberFormat.getNumberInstance(locale).apply {
+            maximumFractionDigits = 1
+            isGroupingUsed = false
+        }
+    }
+    val measure = remember(locale, number) { MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.SHORT, number) }
+    Text(
+        stringResource(
+            R.string.full_presets_model_dimensions,
+            number.format(mesh.sizeX.toDouble()),
+            number.format(mesh.sizeY.toDouble()),
+            measure.formatMeasures(Measure(mesh.sizeZ, MeasureUnit.MILLIMETER)),
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.testTag("full-presets-model-dimensions"),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -213,7 +257,7 @@ private fun EmptyViewportLabel() {
 }
 
 @Composable
-private fun PrintSetupCard(state: FullPresetUiState, onOpen: () -> Unit) {
+private fun PrintSetupCard(state: FullPresetUiState, onOpen: () -> Unit, compact: Boolean = false) {
     val bundle = state.bundle
     val selection = state.selection
     val names = remember(bundle) { bundle?.catalog.orEmpty().associate { it.path to it.name } }
@@ -229,11 +273,11 @@ private fun PrintSetupCard(state: FullPresetUiState, onOpen: () -> Unit) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(if (compact) 12.dp else 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            PanelIcon(Icons.Outlined.Print)
+            if (!compact) PanelIcon(Icons.Outlined.Print)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -297,7 +341,12 @@ private fun PanelIcon(icon: ImageVector, size: Dp = 40.dp) {
 }
 
 @Composable
-private fun SliceResultCard(output: FullPresetOutput, enabled: Boolean, onSliceAgain: () -> Unit) {
+private fun SliceResultCard(
+    output: FullPresetOutput,
+    enabled: Boolean,
+    onSliceAgain: () -> Unit,
+    compact: Boolean = false,
+) {
     val layers = output.result.totalLayers
     Surface(
         modifier = Modifier.fillMaxWidth().testTag("full-presets-result"),
@@ -305,12 +354,13 @@ private fun SliceResultCard(output: FullPresetOutput, enabled: Boolean, onSliceA
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
+        val horizontalPadding = if (compact) 12.dp else 16.dp
         Row(
-            modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = horizontalPadding, top = 12.dp, end = horizontalPadding, bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            PanelIcon(Icons.Outlined.CheckCircle)
+            if (!compact) PanelIcon(Icons.Outlined.CheckCircle)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     pluralStringResource(R.plurals.full_presets_slice_complete, layers, layers),
@@ -323,6 +373,7 @@ private fun SliceResultCard(output: FullPresetOutput, enabled: Boolean, onSliceA
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                SliceEstimates(output.result)
                 TextButton(
                     onClick = onSliceAgain,
                     enabled = enabled,
@@ -332,5 +383,47 @@ private fun SliceResultCard(output: FullPresetOutput, enabled: Boolean, onSliceA
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SliceEstimates(result: SliceResult) {
+    val locale = LocalConfiguration.current.locales[0]
+    val formatter = remember(locale) { MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.SHORT) }
+    val time = result.estimatedTimeSeconds
+    val grams = result.estimatedFilamentGrams
+    val millimeters = result.estimatedFilamentMm
+    if (time.isFinite() && time > 0f) {
+        val seconds = time.roundToLong().coerceAtLeast(1)
+        val minutes = seconds / 60
+        val hours = minutes / 60
+        val duration = when {
+            hours > 0 && minutes % 60 > 0 -> formatter.formatMeasures(
+                Measure(hours, MeasureUnit.HOUR), Measure(minutes % 60, MeasureUnit.MINUTE),
+            )
+            hours > 0 -> formatter.formatMeasures(Measure(hours, MeasureUnit.HOUR))
+            minutes > 0 -> formatter.formatMeasures(Measure(minutes, MeasureUnit.MINUTE))
+            else -> formatter.formatMeasures(Measure(seconds, MeasureUnit.SECOND))
+        }
+        Text(
+            stringResource(R.string.full_presets_estimated_time, duration),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("full-presets-estimated-time"),
+        )
+    }
+    val filament = when {
+        grams.isFinite() && grams > 0f -> Measure(grams, MeasureUnit.GRAM)
+        millimeters.isFinite() && millimeters >= 1000f -> Measure(millimeters / 1000f, MeasureUnit.METER)
+        millimeters.isFinite() && millimeters > 0f -> Measure(millimeters, MeasureUnit.MILLIMETER)
+        else -> null
+    }
+    filament?.let {
+        Text(
+            stringResource(R.string.full_presets_estimated_filament, formatter.formatMeasures(it)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("full-presets-estimated-filament"),
+        )
     }
 }

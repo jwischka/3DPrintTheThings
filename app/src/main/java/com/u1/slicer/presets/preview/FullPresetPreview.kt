@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import com.u1.slicer.NativeLibrary
 import com.u1.slicer.R
 import com.u1.slicer.viewer.MeshData
+import com.u1.slicer.viewer.ModelCameraPose
 import com.u1.slicer.viewer.NativePreviewMesh
 import com.u1.slicer.viewer.NativeRenderBatch
 import java.io.File
@@ -22,7 +23,10 @@ import org.json.JSONObject
 internal sealed interface FullPresetPreview {
     data object Empty : FullPresetPreview
     data object Loading : FullPresetPreview
-    data class Ready(val mesh: MeshData) : FullPresetPreview
+    data class Ready(val mesh: MeshData) : FullPresetPreview {
+        // The UI thread retains the camera for this import across viewport recreation.
+        var cameraPose: ModelCameraPose? = null
+    }
     data class Unavailable(@StringRes val reason: Int) : FullPresetPreview
 }
 
@@ -125,10 +129,10 @@ internal object FullPresetPreviewLoader {
         }
     }
 
-    private fun ByteBuffer.copyDirect(bytes: Int): ByteBuffer? {
+    internal fun ByteBuffer.copyDirect(bytes: Int): ByteBuffer? {
         if (remaining() != bytes) return null
         return ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder()).apply {
-            put(duplicate())
+            put(this@copyDirect.duplicate())
             flip()
         }
     }

@@ -16,8 +16,11 @@ and checksums before packaging the selected libraries.
 The Prepare tab brings together the imported model, print setup, and slice
 result. A settings sheet selects the bundle, printer, process, and ordered
 filament slots. The workspace stacks these panels on narrow displays and puts
-the model and setup side by side on wider displays. Android's document picker
-handles preset import, model import, and G-code export.
+the model and setup side by side on wider displays. Navigation moves from a
+bottom bar to a side rail in landscape and wide windows. Model dimensions come
+from the preview bounds; slice time and material estimates come from the native
+result and remain absent when unavailable. Android's document picker handles
+preset import, model import, and G-code export.
 
 Preset import accepts a ZIP containing `manifest.json` at its root and exactly
 the referenced JSON files. Archive and expanded sizes, individual files, entry
@@ -33,7 +36,9 @@ render batches into Android-owned buffers. The native preview scene is released
 before the live model is cleared and the mutex is returned. These buffers
 preserve 3MF transforms and file-indexed filament colors and can be uploaded
 again after EGL context loss. The viewport fits the model and supports orbit,
-pan, and zoom. A rejected replacement leaves the previous model available.
+pan, and zoom. The imported preview retains its camera pose across tab switches
+and activity rotation, with zoom relative to the fitted viewport. Fit resets
+that pose; a new import starts fitted. A rejected replacement leaves the previous model available.
 A display-budget or preview export failure leaves the imported file available
 for slicing.
 
@@ -55,10 +60,11 @@ stale indication. Editing the endpoint or key restarts monitoring with a new
 connection.
 
 Camera snapshots use Moonraker discovery and same-host fallback URLs,
-including the printer's web port. The dashboard reuses a working URL until it
-fails, bounds response and decode sizes, and timestamps receipt of a
+including the printer's web port. The dashboard reuses a working webcam URL
+until it fails, bounds response and decode sizes, and timestamps receipt of a
 snapshot. The `monitor.jpg` fallback can serve a cached image with unknown
-capture time. The optional API key uses the private no-backup store and
+capture time; while using it, discovery periodically checks for a recovered
+webcam. The optional API key uses the private no-backup store and
 attaches only within the configured scheme, host, port, and path prefix.
 Monitoring requests disable redirects. Shared credential and endpoint rules
 are documented under [Moonraker connections and transfers](printer-connection.md).

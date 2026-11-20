@@ -1,11 +1,20 @@
 package com.u1.slicer
 
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -14,12 +23,16 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.presets.FullPresetViewModel
 import com.u1.slicer.presets.preview.FullPresetPreview
+import com.u1.slicer.presets.preview.PREVIEW_MODEL_SURFACE
+import com.u1.slicer.viewer.MeshData
+import com.u1.slicer.viewer.ModelCameraPose
 import com.u1.slicer.viewer.ModelViewerView
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -44,7 +57,7 @@ class FullPresetPreviewInstrumentedTest {
             assertEquals(10f, mesh.sizeY, 0.001f)
             assertEquals(10f, mesh.sizeZ, 0.001f)
             assertNativeModelCleared()
-            assertModelRendered(scenario, ::isStlColor)
+            assertModelRendered(scenario, "preview-stl", ::isStlColor)
             captureScreen("preview-stl")
 
             scenario.onActivity {
@@ -52,8 +65,10 @@ class FullPresetPreviewInstrumentedTest {
             }
             scenario.moveToState(Lifecycle.State.CREATED)
             scenario.moveToState(Lifecycle.State.RESUMED)
-            assertModelRendered(scenario, ::isStlColor)
+            assertModelRendered(scenario, "preview-restored", ::isStlColor)
             captureScreen("preview-restored")
+
+            assertCameraSurvivesNavigationAndRotation(scenario)
         }
     }
 
@@ -68,15 +83,27 @@ class FullPresetPreviewInstrumentedTest {
             val preview = requireReady(model)
             val imported = requireNotNull(model.state.value.model)
             assertTrue("3MF volume translations should be preserved", preview.mesh.sizeX > 20f)
-            val painted = preview.mesh.batches.associate { batch ->
-                val slot = requireNotNull(batch.materialIndices).get(0).toInt() and 255
+            val painted = mutableMapOf<Int, MutableSet<List<Float>>>()
+            for (batch in preview.mesh.batches) {
+                val materials = requireNotNull(batch.materialIndices)
                 val rgba = requireNotNull(batch.colorBuffer)
-                slot to listOf(rgba.get(0), rgba.get(1), rgba.get(2))
+                for (triangle in 0 until batch.triangleCount) {
+                    val slot = materials.get(triangle).toInt() and 255
+                    val firstVertex = triangle * 3 * 4
+                    val colors = painted.getOrPut(slot) { mutableSetOf() }
+                    for (vertex in 0 until 3) {
+                        val base = firstVertex + vertex * 4
+                        colors += listOf(rgba.get(base), rgba.get(base + 1), rgba.get(base + 2))
+                    }
+                }
             }
-            assertEquals(listOf(157 / 255f, 34 / 255f, 53 / 255f), painted[0])
-            assertEquals(listOf(0f, 0f, 0f), painted[1])
+            val expectedColors = mapOf(
+                0 to setOf(listOf(157 / 255f, 34 / 255f, 53 / 255f)),
+                1 to setOf(listOf(0f, 0f, 0f)),
+            )
+            assertEquals("3MF render colors by original material slot", expectedColors, painted)
             assertNativeModelCleared()
-            assertModelRendered(scenario) { pixel ->
+            assertModelRendered(scenario, "preview-3mf") { pixel ->
                 Color.red(pixel) > 65 && Color.red(pixel) > Color.green(pixel) * 1.4f
             }
             captureScreen("preview-3mf")
@@ -104,32 +131,142 @@ class FullPresetPreviewInstrumentedTest {
         }
     }
 
-    private fun assertModelRendered(scenario: ActivityScenario<FullPresetActivity>, isModelColor: (Int) -> Boolean) {
-        // A valid surface might still be presenting its previous frame just after the GL upload.
-        compose.waitUntil(20_000) {
-            val captured = CountDownLatch(1)
-            var frame: Bitmap? = null
+    private fun assertCameraSurvivesNavigationAndRotation(scenario: ActivityScenario<FullPresetActivity>) {
+        val originalPose = awaitCameraPose(scenario)
+        compose.onNodeWithTag(PREVIEW_MODEL_SURFACE).performTouchInput {
+            swipe(start = center, end = center + Offset(-width * 0.18f, height * 0.08f))
+        }
+        val orbited = awaitCameraPose(scenario) {
+            abs(it.view.azimuth - originalPose.view.azimuth) > 5
+        }
+
+        compose.onNodeWithTag("full-presets-tab-printer").performClick()
+        compose.onNodeWithTag("full-presets-tab-prepare").performClick()
+        assertEquivalentPose(orbited, awaitCameraPose(scenario))
+
+        var savedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        var targetOrientation = Configuration.ORIENTATION_LANDSCAPE
+        try {
             scenario.onActivity {
-                val viewer = findViewer(it.window.decorView)
-                if (viewer == null || !viewer.holder.surface.isValid || viewer.renderer.meshData == null) {
-                    captured.countDown()
+                savedOrientation = it.requestedOrientation
+                if (it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                    targetOrientation = Configuration.ORIENTATION_PORTRAIT
+                }
+                it.requestedOrientation = if (targetOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                 } else {
-                    viewer.captureBitmap { bitmap ->
-                        frame = bitmap
-                        captured.countDown()
-                    }
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                 }
             }
-            assertTrue("GL surface screenshot timed out", captured.await(5, TimeUnit.SECONDS))
-            val bitmap = frame ?: return@waitUntil false
-            try {
-                val pixels = IntArray(bitmap.width * bitmap.height)
-                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-                pixels.count(isModelColor) > pixels.size / 50
-            } finally {
-                bitmap.recycle()
+            compose.waitUntil(20_000) {
+                var matched = false
+                if (scenario.state == Lifecycle.State.RESUMED) {
+                    scenario.onActivity { matched = it.resources.configuration.orientation == targetOrientation }
+                }
+                matched
+            }
+            assertEquivalentPose(orbited, awaitCameraPose(scenario))
+
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            compose.onNodeWithContentDescription(context.getString(R.string.full_presets_preview_fit)).performClick()
+            val fitted = awaitCameraPose(scenario) { abs(it.view.azimuth - originalPose.view.azimuth) < 0.001 }
+            assertEquivalentPose(originalPose, fitted)
+        } finally {
+            if (scenario.state != Lifecycle.State.DESTROYED) {
+                scenario.onActivity { it.requestedOrientation = savedOrientation }
             }
         }
+    }
+
+    private fun awaitCameraPose(
+        scenario: ActivityScenario<FullPresetActivity>,
+        predicate: (ModelCameraPose) -> Boolean = { true },
+    ): ModelCameraPose {
+        var latest: ModelCameraPose? = null
+        compose.waitUntil(20_000) {
+            scenario.onActivity { latest = findViewer(it.window.decorView)?.camera?.modelPose() }
+            latest?.let(predicate) == true
+        }
+        return requireNotNull(latest)
+    }
+
+    private fun assertEquivalentPose(expected: ModelCameraPose, actual: ModelCameraPose) {
+        val expectedZoom = expected.view.distance / expected.fitDistance
+        val actualZoom = actual.view.distance / actual.fitDistance
+        assertEquals(expectedZoom, actualZoom, 0.001)
+        assertEquals(expected.view.copy(distance = actual.view.distance), actual.view)
+    }
+
+    private fun assertModelRendered(
+        scenario: ActivityScenario<FullPresetActivity>,
+        name: String,
+        isModelColor: (Int) -> Boolean,
+    ) {
+        // A valid surface might still be presenting its previous frame just after the GL upload.
+        var lastFrame: Bitmap? = null
+        var lastViewerState = "GL viewer unavailable"
+        var modelPixels = 0
+        try {
+            compose.waitUntil(20_000) {
+                val captured = CountDownLatch(1)
+                var frame: Bitmap? = null
+                scenario.onActivity {
+                    val viewer = findViewer(it.window.decorView)
+                    val mesh = viewer?.renderer?.meshData
+                    lastViewerState = if (viewer == null) "GL viewer unavailable" else
+                        "GL viewer ${viewer.width}x${viewer.height}, attached=${viewer.isAttachedToWindow}, " +
+                            "surface=${viewer.holder.surface.isValid}, camera=${viewer.camera.snapshot()}, ${describeMesh(mesh)}"
+                    if (viewer == null || !viewer.holder.surface.isValid || mesh == null) {
+                        captured.countDown()
+                    } else {
+                        viewer.captureBitmap { bitmap ->
+                            frame = bitmap
+                            captured.countDown()
+                        }
+                    }
+                }
+                assertTrue("GL surface screenshot timed out", captured.await(5, TimeUnit.SECONDS))
+                val bitmap = frame ?: return@waitUntil false
+                lastFrame?.recycle()
+                lastFrame = bitmap
+                val pixels = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                modelPixels = pixels.count(isModelColor)
+                modelPixels > pixels.size / 50
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            val bitmap = lastFrame
+            runCatching { bitmap?.let { savePng(it, "$name-failed-surface") } }
+                .exceptionOrNull()?.let(timeout::addSuppressed)
+            runCatching { captureScreen("$name-failed-screen") }.exceptionOrNull()?.let(timeout::addSuppressed)
+            val frameDetails = if (bitmap == null) "PixelCopy supplied no frame"
+            else "PixelCopy ${bitmap.width}x${bitmap.height}, $modelPixels model-color pixels, " +
+                "common colors=${sampleColors(bitmap)}"
+            throw AssertionError("$name did not display model pixels. $lastViewerState. $frameDetails", timeout)
+        } finally {
+            lastFrame?.recycle()
+        }
+    }
+
+    private fun describeMesh(mesh: MeshData?): String {
+        if (mesh == null) return "no uploaded mesh"
+        val first = mesh.batches.first()
+        val vertex = (0 until 3).map(first.geometry::get)
+        val color = first.colorBuffer?.let { rgba -> (0 until 4).map(rgba::get) }
+        return "${mesh.vertexCount} vertices, bounds=" +
+            "[${mesh.minX}, ${mesh.minY}, ${mesh.minZ}]-[${mesh.maxX}, ${mesh.maxY}, ${mesh.maxZ}], " +
+            "first vertex=$vertex, material=${first.materialIndices?.get(0)?.toInt()?.and(255)}, color=$color"
+    }
+
+    private fun sampleColors(bitmap: Bitmap): List<String> {
+        val colors = mutableMapOf<Int, Int>()
+        for (y in 0 until bitmap.height step 8) {
+            for (x in 0 until bitmap.width step 8) {
+                val value = bitmap.getPixel(x, y)
+                colors[value] = colors.getOrDefault(value, 0) + 1
+            }
+        }
+        return colors.entries.sortedByDescending { it.value }.take(5).map { "%08x=%d".format(it.key, it.value) }
     }
 
     private fun isStlColor(pixel: Int): Boolean {
@@ -141,15 +278,20 @@ class FullPresetPreviewInstrumentedTest {
     private fun captureScreen(name: String) {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val directory = File(instrumentation.targetContext.filesDir, "preset-workflow-capture")
-        assertTrue(directory.isDirectory || directory.mkdirs())
         val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         try {
-            File(directory, "$name.png").outputStream().use {
-                assertTrue(screenshot.compress(Bitmap.CompressFormat.PNG, 100, it))
-            }
+            savePng(screenshot, name)
         } finally {
             screenshot.recycle()
+        }
+    }
+
+    private fun savePng(bitmap: Bitmap, name: String) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.filesDir, "preset-workflow-capture")
+        assertTrue(directory.isDirectory || directory.mkdirs())
+        File(directory, "$name.png").outputStream().use {
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
         }
     }
 

@@ -82,6 +82,8 @@ private fun PreviewSurface(preview: FullPresetPreview.Ready) {
                 factory = { context ->
                     ModelViewerView(context, modelPreviewBackground = background).also { view ->
                         view.preserveEGLContextOnPause = true
+                        view.renderer.pendingModelCameraPose = preview.cameraPose
+                        view.onCameraChanged = { state -> preview.cameraPose = view.camera.modelPose(state) }
                         view.setMesh(preview.mesh)
                         viewer = view
                         lifecycle.addObserver(lifecycleObserver)
@@ -91,13 +93,18 @@ private fun PreviewSurface(preview: FullPresetPreview.Ready) {
                 update = { it.contentDescription = description },
                 onRelease = { view ->
                     lifecycle.removeObserver(lifecycleObserver)
+                    view.onCameraChanged = null
                     view.renderer.releaseForDetach()
                     viewer = null
                 },
                 modifier = Modifier.fillMaxSize().testTag(PREVIEW_MODEL_SURFACE),
             )
             FilledTonalIconButton(
-                onClick = { viewer?.resetView() },
+                onClick = {
+                    preview.cameraPose = null
+                    viewer?.renderer?.pendingModelCameraPose = null
+                    viewer?.resetView()
+                },
                 enabled = viewer != null,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
             ) {

@@ -2,8 +2,11 @@
 """Run real native slicing smoke and provenance capture through bounded adb."""
 import argparse
 import importlib.util
+import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 runner_path = Path(__file__).resolve().parents[2] / "tools" / "run-browser-instrumentation.py"
@@ -34,7 +37,8 @@ PRESET_UI_TEST = (
     "com.u1.slicer.FullPresetPreviewInstrumentedTest#rendersImportedStlAfterEglContextRecreation,"
     "com.u1.slicer.FullPresetPreviewInstrumentedTest#rendersModelWithProjectColorsAndKeepsItOnRejectedImport,"
     "com.u1.slicer.FullPresetPrinterInstrumentedTest#showsPrinterProgressCameraAndConnectionFailures,"
-    "com.u1.slicer.FullPresetLayoutInstrumentedTest#landscapeKeepsPreviewAndActionsReachableAtLargeText"
+    "com.u1.slicer.FullPresetLayoutInstrumentedTest#landscapeKeepsPreviewAndActionsReachableAtLargeText,"
+    "com.u1.slicer.FullPresetPrinterLayoutInstrumentedTest#connectionEditorScrollsAboveKeyboardInLandscapeAtLargeText"
 )
 PRESET_TESTS = ",".join(
     "com.u1.slicer.slicing.NativePresetInstrumentedTest#" + method
@@ -89,6 +93,49 @@ def capture_device_diagnostics(adb: str, directory: Path, stage: str, failed: bo
         print(f"Unable to write device diagnostics: {exc}", file=sys.stderr)
 
 
+def capture_preset_ui_failure(adb: str, directory: Path) -> None:
+    package = runner.RUNNER.split("/", 1)[0].removesuffix(".test")
+    destination = directory / "preset-ui-failure-screenshots"
+    max_png_bytes = 4 * 1024 * 1024
+    png_header = b"\x89PNG\r\n\x1a\n"
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile() as archive_bytes:
+            command = [adb, "exec-out", "run-as", package, "tar", "-cf", "-", "-C",
+                       "files/preset-workflow-capture", "."]
+            result = subprocess.run(command, stdout=archive_bytes, stderr=subprocess.DEVNULL, timeout=15)
+            if result.returncode == 0 and archive_bytes.tell() <= 32 * 1024 * 1024:
+                archive_bytes.seek(0)
+                with tarfile.open(fileobj=archive_bytes, mode="r|") as archive:
+                    for member in archive:
+                        name = member.name.removeprefix("./")
+                        if (not member.isfile() or not 0 < member.size <= max_png_bytes or
+                                not re.fullmatch(r"[A-Za-z0-9_-]{1,80}\.png", name)):
+                            continue
+                        stream = archive.extractfile(member)
+                        if stream is not None:
+                            with stream:
+                                data = stream.read()
+                            if data.startswith(png_header):
+                                (destination / name).write_bytes(data)
+            else:
+                print("Unable to collect preset UI captures from device", file=sys.stderr)
+    except (OSError, tarfile.TarError, subprocess.TimeoutExpired) as exc:
+        print(f"Unable to retain preset UI captures: {exc}", file=sys.stderr)
+
+    try:
+        with tempfile.TemporaryFile() as screen:
+            result = subprocess.run([adb, "exec-out", "screencap", "-p"], stdout=screen,
+                                    stderr=subprocess.DEVNULL, timeout=10)
+            if result.returncode == 0 and screen.tell() <= max_png_bytes:
+                screen.seek(0)
+                data = screen.read()
+                if data.startswith(png_header):
+                    (destination / "screen-after-instrumentation.png").write_bytes(data)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"Unable to capture emulator screen after instrumentation: {exc}", file=sys.stderr)
+
+
 selection = argparse.ArgumentParser(add_help=False)
 selection.add_argument("--suite", choices=("core", "geometry", "ui", "presets", "preset-ui", "all"), default="all")
 selection.add_argument("--adb", default="adb")
@@ -110,4 +157,6 @@ try:
     result = runner.main()
 finally:
     capture_device_diagnostics(options.adb, options.device_diagnostics, "after", failed=result != 0)
+    if result != 0 and options.suite == "preset-ui":
+        capture_preset_ui_failure(options.adb, options.device_diagnostics)
 sys.exit(result)

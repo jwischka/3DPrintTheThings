@@ -5,32 +5,30 @@ import android.graphics.BitmapFactory
 import android.text.format.DateFormat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,8 +38,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -54,52 +52,57 @@ import com.u1.slicer.network.MoonrakerStatusSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.IOException
 import java.text.NumberFormat
 import java.util.Date
+
+private const val CAMERA_ASPECT_RATIO = 16f / 9f
 
 @Composable
 fun ExperimentalPrinterDashboard(modifier: Modifier = Modifier) {
     val context = LocalContext.current.applicationContext
     val settings = remember(context) { ExperimentalPrinterConnection(context) }
     var connection by remember(settings) { mutableStateOf<PrinterConnection?>(null) }
-    var editConnection by remember { mutableStateOf(false) }
+    var editConnection by rememberSaveable { mutableStateOf(false) }
     var configurationVersion by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(settings) {
         connection = withContext(Dispatchers.IO) { settings.load() }
     }
 
-    Column(
-        modifier = modifier
-            .testTag("experimental-printer-dashboard")
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        val configured = connection
-        when {
-            configured == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
-            configured.endpoint.isEmpty() -> DashboardCard {
-                Text(
-                    stringResource(R.string.experimental_printer_connect_title),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(stringResource(R.string.experimental_printer_connect_description))
-                Button(
-                    onClick = { editConnection = true },
-                    modifier = Modifier.testTag("experimental-printer-connect"),
-                ) {
-                    Text(stringResource(R.string.experimental_printer_connect))
+    val configured = connection
+    BoxWithConstraints(modifier) {
+        val cameraMaxWidth = (maxHeight - 24.dp).coerceAtLeast(1.dp) * CAMERA_ASPECT_RATIO
+        Column(
+            modifier = Modifier.fillMaxSize()
+                .testTag("experimental-printer-dashboard")
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            when {
+                configured == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                configured.endpoint.isEmpty() -> DashboardCard {
+                    Text(
+                        stringResource(R.string.experimental_printer_connect_title),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(stringResource(R.string.experimental_printer_connect_description))
+                    Button(
+                        onClick = { editConnection = true },
+                        modifier = Modifier.testTag("experimental-printer-connect"),
+                    ) {
+                        Text(stringResource(R.string.experimental_printer_connect))
+                    }
+                }
+                else -> ConnectedPrinter(settings, configured, configurationVersion, cameraMaxWidth) {
+                    editConnection = true
                 }
             }
-            else -> ConnectedPrinter(settings, configured, configurationVersion) { editConnection = true }
         }
     }
-    if (editConnection) {
-        ConnectionDialog(settings, connection ?: PrinterConnection(), onDismiss = { editConnection = false }) {
+    if (editConnection && configured != null) {
+        ExperimentalPrinterConnectionDialog(settings, configured, onDismiss = { editConnection = false }) {
             connection = it
             configurationVersion++
             editConnection = false
@@ -114,6 +117,7 @@ private fun ConnectedPrinter(
     settings: ExperimentalPrinterConnection,
     connection: PrinterConnection,
     configurationVersion: Int,
+    cameraMaxWidth: Dp,
     onEdit: () -> Unit,
 ) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -164,9 +168,14 @@ private fun ConnectedPrinter(
                     else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.testTag("experimental-printer-connection-state"),
                 )
-                Text(connection.endpoint, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    connection.endpoint,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-            OutlinedButton(onClick = onEdit) {
+            OutlinedButton(onClick = onEdit, modifier = Modifier.testTag("experimental-printer-edit")) {
                 Text(stringResource(R.string.experimental_printer_edit))
             }
         }
@@ -198,7 +207,7 @@ private fun ConnectedPrinter(
     val reading = latest
     val staleAt = reading?.receivedAt?.takeUnless { online }
     reading?.let { JobStatusCard(it.snapshot, staleAt) }
-    CameraCard(client, online)
+    CameraCard(client, online, cameraMaxWidth)
     reading?.let { TemperaturesCard(it.snapshot, staleAt) }
 }
 
@@ -302,7 +311,7 @@ private data class CameraFrame(
 )
 
 @Composable
-private fun CameraCard(client: MoonrakerClient?, online: Boolean) {
+private fun CameraCard(client: MoonrakerClient?, online: Boolean, maxWidth: Dp) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var frame by remember(client) { mutableStateOf<CameraFrame?>(null) }
     var pending by remember(client) { mutableStateOf(false) }
@@ -333,7 +342,8 @@ private fun CameraCard(client: MoonrakerClient?, online: Boolean) {
                 bitmap = remember(latest.bitmap) { latest.bitmap.asImageBitmap() },
                 contentDescription = stringResource(R.string.experimental_printer_snapshot),
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+                    .widthIn(max = maxWidth).fillMaxWidth().aspectRatio(CAMERA_ASPECT_RATIO)
                     .testTag("experimental-printer-camera-frame"),
             )
             val label = if (online && !unavailable && !pending) R.string.experimental_printer_snapshot_received
@@ -390,97 +400,4 @@ private fun duration(seconds: Double): String {
         elapsed < 3600 -> stringResource(R.string.experimental_printer_duration_minutes, elapsed / 60)
         else -> stringResource(R.string.experimental_printer_duration_hours, elapsed / 3600, elapsed % 3600 / 60)
     }
-}
-
-@Composable
-private fun ConnectionDialog(
-    settings: ExperimentalPrinterConnection,
-    connection: PrinterConnection,
-    onDismiss: () -> Unit,
-    onSaved: (PrinterConnection) -> Unit,
-) {
-    var endpoint by remember { mutableStateOf(connection.endpoint) }
-    var apiKey by remember { mutableStateOf("") }
-    var clearKey by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
-    var saveFailed by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val normalized = remember(endpoint) { ExperimentalPrinterConnection.validateEndpoint(endpoint) }
-    val validKey = ExperimentalPrinterConnection.validKey(apiKey)
-    val hasSavedKey = connection.hasApiKey && normalized == connection.endpoint
-
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text(stringResource(R.string.experimental_printer_connection_dialog)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = endpoint,
-                    onValueChange = { endpoint = it },
-                    label = { Text(stringResource(R.string.experimental_printer_endpoint)) },
-                    placeholder = { Text(stringResource(R.string.experimental_printer_endpoint_example)) },
-                    singleLine = true,
-                    enabled = !saving,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    isError = endpoint.isNotBlank() && normalized.isEmpty(),
-                    modifier = Modifier.fillMaxWidth().testTag("experimental-printer-endpoint"),
-                )
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    label = { Text(stringResource(R.string.experimental_printer_key)) },
-                    singleLine = true,
-                    enabled = !saving && !(hasSavedKey && clearKey),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    visualTransformation = PasswordVisualTransformation(),
-                    isError = !validKey,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (hasSavedKey && apiKey.isBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = clearKey, onCheckedChange = { clearKey = it }, enabled = !saving)
-                        Text(stringResource(R.string.experimental_printer_clear_key))
-                    }
-                }
-                if (saveFailed) {
-                    Text(
-                        stringResource(R.string.experimental_printer_save_failed),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = normalized.isNotEmpty() && validKey && !saving,
-                modifier = Modifier.testTag("experimental-printer-save"),
-                onClick = {
-                    saving = true
-                    saveFailed = false
-                    val key = apiKey
-                    val clear = hasSavedKey && clearKey
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            try {
-                                settings.save(normalized, key, clear)
-                            } catch (_: IOException) {
-                                null
-                            } catch (_: SecurityException) {
-                                null
-                            }
-                        }
-                        saving = false
-                        if (result == null) saveFailed = true else onSaved(result)
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.experimental_printer_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !saving) {
-                Text(stringResource(R.string.experimental_printer_cancel))
-            }
-        },
-    )
 }
