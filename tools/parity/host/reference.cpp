@@ -2,6 +2,7 @@
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/libslic3r.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -74,6 +75,7 @@ int main(int argc, char** argv)
                 std::ofstream(output / "manifest-config.json") << actual.dump(2) << '\n';
                 throw std::runtime_error("Manifest composition differs from independent upstream vendor loading");
             }
+            std::cerr << "Vendor and manifest configurations match (" << expected.size() << " keys)\n";
             loaded.config = std::move(reference);
         }
         auto model = Slic3r::Model::read_from_file(argv[2]);
@@ -89,12 +91,15 @@ int main(int argc, char** argv)
         const auto effective = serialize_config(loaded.config);
         std::ofstream config_file(output / "effective-config.json");
         config_file << effective.dump(2) << '\n';
+        config_file.close();
         if (!config_file) throw std::runtime_error("Cannot write effective configuration");
         std::ofstream inputs_file(output / "resolved-inputs.json");
         inputs_file << nlohmann::json(loaded.resolved_inputs).dump(2) << '\n';
+        inputs_file.close();
         if (!inputs_file) throw std::runtime_error("Cannot write resolved inputs");
         print.process();
-        const auto gcode = print.export_gcode((output / "cube.gcode").string(), nullptr);
+        Slic3r::GCodeProcessorResult gcode_result;
+        const auto gcode = print.export_gcode((output / "cube.gcode").string(), &gcode_result);
         if (!fs::is_regular_file(gcode) || fs::file_size(gcode) == 0)
             throw std::runtime_error("No reference G-code produced");
         std::cout << "Linux reference slice complete\n";
