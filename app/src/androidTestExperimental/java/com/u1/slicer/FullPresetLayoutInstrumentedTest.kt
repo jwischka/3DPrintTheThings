@@ -110,11 +110,17 @@ class FullPresetLayoutInstrumentedTest {
                     assertNotNull(model.state.value.error)
                     assertEquals(selection, model.state.value.selection)
                     reachControl("full-presets-error-details")
+                    captureRenderedPreview(stage, largeGlyphHeight)
                     val dimensions = requireNotNull(
                         compose.onNodeWithTag("full-presets-model-dimensions").assertIsDisplayed().textLayout(),
                     ) { "Expected dimensions for the imported 10 mm cube" }
-                    assertFalse("Cube dimensions are clipped at 200% text size", dimensions.hasVisualOverflow)
-                    captureRenderedPreview(stage, largeGlyphHeight)
+                    assertFalse(
+                        "Cube dimensions are clipped at 200% text size: ${dimensions.layoutInput.text.text}; " +
+                            "size=${dimensions.size}, constraints=${dimensions.layoutInput.constraints}, " +
+                            "lines=${dimensions.lineCount}, horizontal=${dimensions.didOverflowWidth}, " +
+                            "vertical=${dimensions.didOverflowHeight}",
+                        dimensions.hasVisualOverflow,
+                    )
                     openSettings()
                     compose.onNodeWithTag("full-presets-add-filament")
                         .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()

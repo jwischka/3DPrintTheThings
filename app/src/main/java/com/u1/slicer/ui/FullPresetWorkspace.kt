@@ -204,7 +204,7 @@ private fun ModelMetadata(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                mesh?.let { ModelDimensions(it, if (stacked) 2 else 1) }
+                mesh?.let { ModelDimensions(it, wrap = stacked) }
             }
         }
         val replaceButton: @Composable () -> Unit = {
@@ -235,7 +235,7 @@ private fun ModelMetadata(
 }
 
 @Composable
-private fun ModelDimensions(mesh: MeshData, lines: Int) {
+private fun ModelDimensions(mesh: MeshData, wrap: Boolean) {
     val sizes = listOf(mesh.sizeX, mesh.sizeY, mesh.sizeZ)
     if (sizes.any { !it.isFinite() || it < 0f }) return
 
@@ -256,9 +256,9 @@ private fun ModelDimensions(mesh: MeshData, lines: Int) {
         ),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.testTag("full-presets-model-dimensions"),
-        maxLines = lines,
-        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth().testTag("full-presets-model-dimensions"),
+        maxLines = if (wrap) Int.MAX_VALUE else 1,
+        overflow = if (wrap) TextOverflow.Clip else TextOverflow.Ellipsis,
     )
 }
 

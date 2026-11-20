@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -74,6 +75,7 @@ class FullPresetPrinterInstrumentedTest {
         try {
             MockWebServer().use { server ->
                 server.start(InetAddress.getByName("127.0.0.1"), 0)
+                val endpoint = "http://127.0.0.1:${server.port}"
                 server.dispatcher = object : Dispatcher() {
                     override fun dispatch(request: RecordedRequest): MockResponse {
                         requests.add(request)
@@ -88,7 +90,7 @@ class FullPresetPrinterInstrumentedTest {
                                 MockResponse().setBody(PRINTING)
                             }
                             "/server/webcams/list" -> MockResponse().setBody(
-                                """{"result":{"webcams":[{"enabled":true,"snapshot_url":"${server.url("/snapshot.jpg")}"}]}}""",
+                                """{"result":{"webcams":[{"enabled":true,"snapshot_url":"$endpoint/snapshot.jpg"}]}}""",
                             )
                             "/snapshot.jpg" -> MockResponse().addHeader("Content-Type", "image/jpeg")
                                 .setBody(Buffer().write(jpeg))
@@ -102,7 +104,7 @@ class FullPresetPrinterInstrumentedTest {
                         compose.onNodeWithTag("full-presets-tab-printer").performClick()
                         waitFor("Monitor a printer")
                         compose.onNodeWithTag("experimental-printer-connect").performClick()
-                        compose.onNodeWithTag("experimental-printer-endpoint").performTextInput(server.url("/").toString())
+                        compose.onNodeWithTag("experimental-printer-endpoint").performTextInput(endpoint)
                         compose.onNodeWithTag("experimental-printer-save").performClick()
                         waitFor("Printing")
                         compose.onNodeWithText("Example bracket.gcode").assertIsDisplayed()
@@ -183,6 +185,10 @@ class FullPresetPrinterInstrumentedTest {
                     val localhost = InetAddress.getByName("127.0.0.1")
                     original.start(localhost, 0)
                     replacement.start(localhost, 0)
+                    // Match the listener's address family. MockWebServer.url() can report localhost,
+                    // where the emulator can try ::1 first even though these sockets are IPv4-only.
+                    val originalEndpoint = "http://127.0.0.1:${original.port}"
+                    val replacementEndpoint = "http://127.0.0.1:${replacement.port}"
                     original.dispatcher = object : Dispatcher() {
                         override fun dispatch(request: RecordedRequest): MockResponse {
                             if (leftPrinter.get()) requestAfterLeaving.countDown()
@@ -206,7 +212,7 @@ class FullPresetPrinterInstrumentedTest {
                             return when (request.path?.substringBefore('?')) {
                                 "/printer/objects/query" -> printStatus(newJob)
                                 "/server/webcams/list" -> MockResponse().setBody(
-                                    """{"result":{"webcams":[{"snapshot_url":"${replacement.url("/snapshot.jpg")}"}]}}""",
+                                    """{"result":{"webcams":[{"snapshot_url":"$replacementEndpoint/snapshot.jpg"}]}}""",
                                 )
                                 "/snapshot.jpg" -> MockResponse().addHeader("Content-Type", "image/jpeg")
                                     .setBody(Buffer().write(jpeg))
@@ -214,7 +220,8 @@ class FullPresetPrinterInstrumentedTest {
                             }
                         }
                     }
-                    ExperimentalPrinterConnection(context).save(original.url("/").toString(), oldKey, false)
+                    val settings = ExperimentalPrinterConnection(context)
+                    settings.save(originalEndpoint, oldKey, false)
 
                     try {
                         ActivityScenario.launch(FullPresetActivity::class.java).use {
@@ -223,14 +230,28 @@ class FullPresetPrinterInstrumentedTest {
                                 waitForText(originalJob)
                                 compose.onNodeWithTag("experimental-printer-edit").performScrollTo().performClick()
                                 compose.onNodeWithTag("experimental-printer-endpoint").performScrollTo()
-                                    .performTextReplacement(replacement.url("/").toString())
+                                    .performTextReplacement(replacementEndpoint)
                                 compose.onNodeWithTag("experimental-printer-save").performScrollTo().assertIsDisplayed()
 
                                 holdOriginal.set(true)
                                 compose.waitUntil(20_000) { oldQueryInFlight.count == 0L }
                                 assertEquals(oldKey, requireNotNull(heldRequest.get()).getHeader("X-Api-Key"))
                                 compose.onNodeWithTag("experimental-printer-save").performClick()
-                                waitForText(newJob)
+                                compose.waitUntil(20_000) {
+                                    compose.onAllNodesWithTag("experimental-printer-save")
+                                        .fetchSemanticsNodes().isEmpty()
+                                }
+                                assertEquals(replacementEndpoint, settings.load().endpoint)
+                                compose.onNodeWithText(replacementEndpoint).assertIsDisplayed()
+                                try {
+                                    waitForText(newJob)
+                                } catch (timeout: ComposeTimeoutException) {
+                                    throw AssertionError(
+                                        "No replacement job after switch from $originalEndpoint to $replacementEndpoint " +
+                                            "(original requests=${original.requestCount}, replacement requests=${replacement.requestCount})",
+                                        timeout,
+                                    )
+                                }
                                 val statusRequest = requireNotNull(replacement.takeRequest(2, TimeUnit.SECONDS))
                                 assertEquals("/printer/objects/query", statusRequest.path?.substringBefore('?'))
                                 assertNull("Old API key reached replacement endpoint", statusRequest.getHeader("X-Api-Key"))
@@ -305,15 +326,17 @@ class FullPresetPrinterInstrumentedTest {
         }
 
         try {
-            scenario.onActivity {
-                it.requestedOrientation = if (newOrientation == Configuration.ORIENTATION_LANDSCAPE) {
-                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                } else {
-                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            withFailureScreenshot("printer-camera-rotation-failure") {
+                scenario.onActivity {
+                    it.requestedOrientation = if (newOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+                        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    } else {
+                        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    }
                 }
+                waitForOrientation(scenario, newOrientation)
+                assertRestoredExpandedCamera()
             }
-            waitForOrientation(scenario, newOrientation)
-            assertRestoredExpandedCamera()
         } finally {
             if (scenario.state != Lifecycle.State.DESTROYED) {
                 scenario.onActivity { it.requestedOrientation = previousRequest }

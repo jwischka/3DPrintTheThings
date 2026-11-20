@@ -77,7 +77,7 @@ class FullPresetPrinterLayoutInstrumentedTest {
                             MockResponse().setResponseCode(404)
                         }
                 }
-                settings.save(server.url("/").toString(), "test-fixture-key", clearApiKey = false)
+                settings.save("http://127.0.0.1:${server.port}", "test-fixture-key", clearApiKey = false)
                 ActivityScenario.launch(FullPresetActivity::class.java).use { scenario ->
                     var previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                     try {
