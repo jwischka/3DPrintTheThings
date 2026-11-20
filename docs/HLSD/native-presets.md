@@ -3,12 +3,36 @@
 The experimental engine accepts complete printer, process and filament presets
 through the existing `loadProfile` JNI method. This path exists because the legacy
 slice configuration exposes only a subset of Orca settings. It is opt-in: the
-normal APK retains its inherited native library, and its UI does not select this
-manifest format.
+normal APK retains its inherited native library. The experimental build selects
+this manifest format in its dedicated slicing workflow.
 
-A JSON manifest has exactly five fields: `schema` (`orca-native-presets-v1`),
+The `experimental` Android build is a separately installed application with the
+`.presets` application ID suffix. Its launcher owns a dedicated model and preset
+workflow; the regular application's settings, printer connections and native scene
+are not initialized. The build requires an explicit engine directory, verifies
+the ABI and checksums, and never falls back to the inherited native libraries.
+
+Preset import accepts a ZIP containing `manifest.json` at its root and exactly
+the referenced JSON files. Archive and expanded sizes, individual files, entry
+counts, paths, names, categories and inheritance are checked before an atomic
+publish to private storage. Failed imports cannot publish a partial bundle.
+Printer, process and ordered filament selections produce a separate v2 manifest
+with its required parent closure. The original catalog remains available for
+later selections. Selections saved when slicing persist across application recreation.
+
+The screen explicitly describes the geometry-only policy. It imports one STL or
+single-plate 3MF, runs the native load and slice sequence under the native scene
+mutex, then exports the result through Android's document picker. It does not
+apply the regular application's settings or G-code header patches. Changing
+inputs or encountering a failed import or slice clears the exportable result.
+Cancellation keeps the workflow busy until the native operation returns and its
+model and profile state have been reset.
+
+A v1 JSON manifest has exactly five fields: `schema` (`orca-native-presets-v1`),
 `printer`, `process`, `filaments` (ordered filenames), and `catalog` (inherited
-preset filenames). Paths are relative to the manifest directory and must resolve
+preset filenames). The v2 manifest uses `orca-native-presets-v2` and requires a
+sixth field, `"project_settings": "geometry-only"`. Paths are relative to the
+manifest directory and must resolve
 inside it. The manifest is limited to 64 KiB; each preset to 1 MiB; the selected
 filament list to 16 entries; and the catalog to 128 entries. Files are interpreted
 by the pinned Orca JSON configuration parser. Unknown options, substitutions,
@@ -33,12 +57,20 @@ silently retain a previous preset or fall back to defaults after a failure.
 `loadProfile("")` explicitly resets to legacy mode. A slice copies the loaded
 configuration while holding the mutex, then releases it before processing.
 
-In full-preset mode, STL scene geometry supplies the model and placement; the
-preset bundle supplies the slicing settings. The legacy SliceConfig overrides,
-embedded-project setting whitelist and legacy bed-centering adjustment are
-bypassed. Embedded 3MF projects, layer overrides, and object/volume configuration
-other than filament assignment are rejected because their precedence has not
-been defined for this format. Upstream print validation failures are fatal.
+The preset bundle supplies slicing settings and bypasses the legacy SliceConfig
+overrides, embedded-project settings whitelist and legacy bed-centering
+adjustment. V1 requires STL and rejects layer overrides and object or volume
+configuration beyond filament assignment.
+
+V2 accepts STL and 3MF. It slices a copy of the scene, dropping embedded project
+settings, per-material, per-object, per-volume and per-layer settings, custom
+layer G-code and manual brim points. Explicit filament assignments are retained
+and must refer to a slot in the selected manifest. Imported 3MF location, scale,
+rotation and printable status are retained. Raw STL scenes are placed on the bed
+at the bounding-box center of the selected printer's printable area. Painted,
+modifier and negative volumes are rejected. Resetting to legacy mode leaves
+the loaded source scene and its embedded settings available. Upstream print
+validation failures are fatal.
 
 The `full_preset_loaded` diagnostic records relative input filenames, filament
 count and configuration-key count. It does not serialize settings or macros into

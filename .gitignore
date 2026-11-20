@@ -79,3 +79,5 @@ app/.cmake-orca-arm64/
 
 # Superpowers brainstorm session artifacts (HTML mockups, state)
 .superpowers/
+# Generated from the pinned engine presets by native-engine.yml.
+/app/src/androidTest/assets/full-presets-*.zip

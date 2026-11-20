@@ -41,7 +41,8 @@ with the desktop engine remain unverified.
 The build checks ELF architecture, 16 KiB LOAD alignment for the new JNI
 library, the expected compiler version, and the exact 60 exported
 `Java_com_u1_slicer_NativeLibrary_` symbols against the shipped arm64 library.
-It records hashes of the engine and the NDK `libc++_shared.so`. The latter's
+It records hashes of the engine, the NDK `libc++_shared.so`, and the v2 preset
+capability marker. The latter library's
 LOAD alignment is reported separately, so this workflow does not establish
 runtime compatibility with a 16 KiB page-size device.
 
@@ -82,6 +83,25 @@ rotation stability, placement, scaling, triangle batches and scene-handle releas
 Every session requires every selected test to pass. A bounded host-side
 logcat tail survives emulator loss, while host memory and kernel diagnostics
 help distinguish Android assertions from runner failures.
+
+The standalone Full Presets APK uses the `experimental` build type and application
+ID `io.github.jwischka.threedprintthethings.presets`. It requires a native build
+output directory containing both libraries, `full-preset-schema.txt`, and their
+`sha256.txt` receipt. Validation runs even when Gradle has cached the packaging
+steps. Missing files, an unsupported ABI, a missing v2 marker or mismatched
+checksums stop the build. Debug and Release retain the checked-in ARM64 libraries.
+
+```sh
+./gradlew assembleExperimental -PfullPresetEngineDir=/absolute/native/output -PfullPresetAbi=arm64-v8a
+```
+
+The native CI job builds and installs this APK separately for each ABI. Its
+variant-specific instrumentation imports prepared U1 bundles and a model through
+document URIs, drives the Slice and filament controls, checks exact-byte document
+export, and exercises failure recovery and stale-result invalidation. The test
+source set is enabled with `-PpresetInstrumentation=true`. Captured screenshots
+and test logs accompany the APK artifact. `tools/parity/package_presets.py`
+packages a prepared manifest and its exact preset files as an importable ZIP.
 
 The shipping-engine probe installs the original ARM64 app and instrumentation
 APKs on a Google APIs x86_64 emulator with native-bridge support. It verifies

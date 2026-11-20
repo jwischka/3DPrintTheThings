@@ -28,6 +28,7 @@ CORE_TESTS = (
     "com.u1.slicer.printer.DownloadSliceUploadInstrumentedTest#truncatedFixtureCleansPartialAndNormalRetryPersists"
 )
 UI_TEST = "com.u1.slicer.MainActivityWorkflowInstrumentedTest#libraryOpenPrepareSlicePreviewAndUploadOnly"
+PRESET_UI_TEST = "com.u1.slicer.FullPresetWorkflowInstrumentedTest#importSelectSliceAndExport"
 PRESET_TESTS = ",".join(
     "com.u1.slicer.slicing.NativePresetInstrumentedTest#" + method
     for method in (
@@ -35,6 +36,9 @@ PRESET_TESTS = ",".join(
         "invalidManifestBlocksSliceUntilReset", "childOverridesParentAndSliceConfigCannotOverrideIt",
         "distinctFilamentChildrenPreserveSlotOrder", "invalidValuesAndTopologyFailClosed",
         "fullPresetRejectsProjectInput", "wrongTypeTraversalAndCycleFailClosed",
+        "geometryOnlyProjectUsesPresetsAndPreservesSource",
+        "geometryOnlyRejectsPaintAndModifierVolumes",
+        "geometryOnlyCentersStlOnSelectedBedWithoutMovingSource",
     )
 )
 GEOMETRY_TESTS = (
@@ -46,11 +50,13 @@ GEOMETRY_TESTS = (
     "com.u1.slicer.viewer.NativePreparePreviewTest#preparePreviewScene_duplicateReleaseIsRejected"
 )
 selection = argparse.ArgumentParser(add_help=False)
-selection.add_argument("--suite", choices=("core", "geometry", "ui", "presets", "all"), default="all")
+selection.add_argument("--suite", choices=("core", "geometry", "ui", "presets", "preset-ui", "all"), default="all")
 options, remaining = selection.parse_known_args()
 runner.TEST_CLASS = {"core": CORE_TESTS, "geometry": GEOMETRY_TESTS, "ui": UI_TEST,
-                     "presets": PRESET_TESTS,
+                     "presets": PRESET_TESTS, "preset-ui": PRESET_UI_TEST,
                      "all": CORE_TESTS + "," + GEOMETRY_TESTS + "," + UI_TEST + "," + PRESET_TESTS}[options.suite]
 sys.argv = [sys.argv[0], *remaining]
+if options.suite == "preset-ui":
+    runner.RUNNER = "io.github.jwischka.threedprintthethings.presets.test/androidx.test.runner.AndroidJUnitRunner"
 runner.EXPECTED_TESTS = len(runner.TEST_CLASS.split(","))
 sys.exit(runner.main())

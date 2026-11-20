@@ -27,6 +27,13 @@ on:
       - 'scripts/native/build-extra-deps.sh'
       - 'app/src/main/cpp/**'
       - 'app/src/main/java/com/u1/slicer/viewer/**'
+      - 'app/src/main/java/com/u1/slicer/presets/**'
+      - 'app/src/main/java/com/u1/slicer/ui/FullPresetScreen.kt'
+      - 'app/src/main/java/com/u1/slicer/FullPresetActivity.kt'
+      - 'app/src/experimental/**'
+      - 'app/src/androidTestExperimental/**'
+      - 'app/build.gradle'
+      - 'tools/parity/package_presets.py'
 
 permissions:
   contents: read
@@ -162,6 +169,8 @@ jobs:
           test "$(git -C "$source" rev-parse HEAD)" = "$pin"
           python3 tools/parity/prepare_presets.py --source "$source" --output app/src/androidTest/assets/full-presets
           printf '%s\n' "$pin" > app/src/androidTest/assets/full-presets/engine-source.txt
+          python3 tools/parity/package_presets.py --bundle app/src/androidTest/assets/full-presets --manifest actual.json --output app/src/androidTest/assets/full-presets-actual.zip
+          python3 tools/parity/package_presets.py --bundle app/src/androidTest/assets/full-presets --manifest diagnostic.json --output app/src/androidTest/assets/full-presets-diagnostic.zip
       - name: Build original test APKs
         run: >-
           ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --no-build-cache --max-workers=2
@@ -184,6 +193,17 @@ jobs:
           app_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/app-engine.apk" | grep 'Signer #1 certificate SHA-256 digest:')
           test_cert=$("$signer" verify --print-certs "$RUNNER_TEMP/native-test/test-engine.apk" | grep 'Signer #1 certificate SHA-256 digest:')
           test -n "$app_cert" && test "$app_cert" = "$test_cert"
+      - name: Build standalone experimental preset app and tests
+        run: >-
+          ./gradlew assembleExperimental assembleExperimentalAndroidTest --no-daemon --no-build-cache --max-workers=2
+          -PpresetInstrumentation=true -PfullPresetEngineDir="$RUNNER_TEMP/native-engine-tested" -PfullPresetAbi=${{ matrix.abi }}
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" -Pkotlin.daemon.jvmargs=-Xmx3g
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-presets-app-${{ matrix.abi }}
+          path: |
+            app/build/outputs/apk/experimental/*.apk
+            app/src/androidTest/assets/full-presets-actual.zip
       - name: Enable KVM on the ephemeral runner
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -232,6 +252,11 @@ jobs:
             adb shell am force-stop io.github.jwischka.threedprintthethings
             python3 scripts/native/run-native-instrumentation.py --suite presets --app "$RUNNER_TEMP/native-test/app-engine.apk" --test "$RUNNER_TEMP/native-test/test-engine.apk" --log native-slice-report/preset-instrumentation.log --timeout 900
             python3 scripts/native/export-full-preset-capture.py --bundle app/src/androidTest/assets/full-presets --engine-pin "$(cat app/src/androidTest/assets/full-presets/engine-source.txt)" --output native-slice-report/presets
+            adb shell am force-stop io.github.jwischka.threedprintthethings
+            python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log native-slice-report/preset-ui-instrumentation.log --timeout 900
+            adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > native-slice-report/preset-ui-package-abi.txt
+            grep -F 'primaryCpuAbi=${{ matrix.abi }}' native-slice-report/preset-ui-package-abi.txt
+            for name in selection result; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
       - name: Stop simulator and retain diagnostics
         if: always()
         run: |

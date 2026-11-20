@@ -46,7 +46,15 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     const fs::path root = manifest.parent_path();
     std::ifstream stream(manifest);
     Json spec = Json::parse(stream);
-    if (!spec.is_object() || spec.size() != 5 || spec.at("schema") != "orca-native-presets-v1") throw std::runtime_error("Unsupported preset manifest");
+    if (!spec.is_object() || !spec.contains("schema"))
+        throw std::runtime_error("Unsupported preset manifest");
+    const bool geometry_only = spec.at("schema") == "orca-native-presets-v2";
+    if (geometry_only) {
+        if (spec.size() != 6 || !spec.contains("project_settings") || spec.at("project_settings") != "geometry-only")
+            throw std::runtime_error("Unsupported preset manifest");
+    } else if (spec.size() != 5 || spec.at("schema") != "orca-native-presets-v1") {
+        throw std::runtime_error("Unsupported preset manifest");
+    }
     const auto printer = spec.at("printer").get<std::string>();
     const auto process = spec.at("process").get<std::string>();
     const auto filaments = spec.at("filaments").get<std::vector<std::string>>();
@@ -85,6 +93,7 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     std::map<std::string, Slic3r::DynamicPrintConfig> resolved;
     std::set<std::string> visiting;
     FullPresetResult result;
+    result.geometry_only = geometry_only;
     result.filament_count = filaments.size();
     std::function<const Slic3r::DynamicPrintConfig&(const std::string&, const std::string&)> resolve;
     resolve = [&](const std::string& name, const std::string& type) -> const Slic3r::DynamicPrintConfig& {

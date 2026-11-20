@@ -26,6 +26,7 @@ android {
         targetSdk 34
         versionCode 401
         versionName "4.0.1"
+        buildConfigField 'boolean', 'FULL_PRESET_EXPERIMENTAL', 'false'
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -55,6 +56,21 @@ android {
             minifyEnabled false
             signingConfig signingConfigs.debug
         }
+        // Independently installed app: never package the inherited engine here.
+        experimental {
+            initWith debug
+            applicationIdSuffix '.presets'
+            matchingFallbacks = ['debug']
+            buildConfigField 'boolean', 'FULL_PRESET_EXPERIMENTAL', 'true'
+        }
+    }
+
+    testBuildType project.hasProperty('presetInstrumentation') ? 'experimental' : 'debug'
+    sourceSets {
+        main.jniLibs.srcDirs = []
+        debug.jniLibs.srcDirs = ['src/main/jniLibs']
+        release.jniLibs.srcDirs = ['src/main/jniLibs']
+        experimental.jniLibs.srcDirs = [layout.buildDirectory.dir('fullPresetJni')]
     }
 
     testOptions {
@@ -92,6 +108,68 @@ android {
 //        }
 //    }
 
+}
+
+// Require an explicit, checksummed native build output. A normal build does not
+// consult this directory or change its shipped libraries.
+def verifyFullPresetEngine = tasks.register('verifyFullPresetEngine') {
+    def engineDirectory = providers.gradleProperty('fullPresetEngineDir')
+    def engineAbi = providers.gradleProperty('fullPresetAbi').orElse('arm64-v8a')
+    // No outputs: validate on every build, including when Sync has no sources.
+    doLast {
+        if (!engineDirectory.isPresent()) {
+            throw new GradleException('Experimental builds require -PfullPresetEngineDir=<native build output>.')
+        }
+        def abi = engineAbi.get()
+        def machines = ['arm64-v8a': 183, 'x86_64': 62]
+        if (!machines.containsKey(abi)) throw new GradleException('Unsupported experimental engine ABI.')
+        def engine = file(engineDirectory.get())
+        def receipt = new File(engine, 'sha256.txt')
+        if (!receipt.isFile()) throw new GradleException('Experimental engine sha256.txt is missing.')
+        def capability = new File(engine, 'full-preset-schema.txt')
+        if (!capability.isFile() || capability.text.trim() != 'orca-native-presets-v2') {
+            throw new GradleException('Experimental builds require an engine built with geometry-only v2 preset support.')
+        }
+        ['libprusaslicer-jni.so', 'libc++_shared.so', 'full-preset-schema.txt'].each { name ->
+            def library = new File(engine, name)
+            if (!library.isFile()) throw new GradleException("Experimental engine is missing ${name}.")
+            if (name.endsWith('.so')) {
+                byte[] header = new byte[20]
+                library.withInputStream { stream ->
+                    if (stream.read(header) != 20) throw new GradleException('Truncated experimental engine.')
+                }
+                if ((header[0] & 255) != 127 || header[1] != 69 || header[2] != 76 || header[3] != 70 ||
+                    header[4] != 2 || header[5] != 1 || ((header[18] & 255) | ((header[19] & 255) << 8)) != machines[abi]) {
+                    throw new GradleException('Experimental engine ELF architecture does not match fullPresetAbi.')
+                }
+            }
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            library.withInputStream { stream ->
+                byte[] buffer = new byte[65536]
+                int size
+                while ((size = stream.read(buffer)) != -1) digest.update(buffer, 0, size)
+            }
+            def expected = receipt.readLines().findAll { line ->
+                def parts = line.trim().split(/\s+/, 2)
+                parts.size() == 2 && parts[0] ==~ /[0-9a-f]{64}/ &&
+                    parts[1].replace('\\', '/').replaceFirst(/^\*/, '').tokenize('/').last() == name
+            }
+            if (expected.size() != 1 || expected[0].take(64) != digest.digest().encodeHex().toString()) {
+                throw new GradleException("Experimental engine checksum mismatch for ${name}.")
+            }
+        }
+    }
+}
+def prepareFullPresetEngine = tasks.register('prepareFullPresetEngine', Sync) {
+    dependsOn verifyFullPresetEngine
+    into layout.buildDirectory.dir('fullPresetJni')
+    from(providers.gradleProperty('fullPresetEngineDir').orElse('__missing_experimental_engine__')) {
+        include 'libprusaslicer-jni.so', 'libc++_shared.so'
+        into providers.gradleProperty('fullPresetAbi').orElse('arm64-v8a')
+    }
+}
+tasks.configureEach { task ->
+    if (task.name == 'mergeExperimentalJniLibFolders') task.dependsOn prepareFullPresetEngine
 }
 
 dependencies {
@@ -160,4 +238,6 @@ dependencies {
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
     debugImplementation 'androidx.compose.ui:ui-tooling'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
+    experimentalImplementation 'androidx.compose.ui:ui-tooling'
+    experimentalImplementation 'androidx.compose.ui:ui-test-manifest'
 }

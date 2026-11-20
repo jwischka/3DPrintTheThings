@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <nlohmann/json.hpp>
@@ -20,9 +21,11 @@
 #include "libslic3r/GCode.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/clipper.hpp"
+#include "libslic3r/calib.hpp"
 
 // =============================================================================
 // sapil_print.cpp — Slicing using PrusaSlicer's Slic3r::Print
@@ -177,6 +180,58 @@ static std::string buildNativeModelSnapshot(const Slic3r::Model& model)
     out << "\"printableInstanceCount\":" << printable_instances;
     out << "}";
     return out.str();
+}
+
+static void keep_filament_assignment(Slic3r::ModelConfig& config, size_t filament_count)
+{
+    const auto* extruder = config.option("extruder");
+    const int tool = extruder ? extruder->getInt() : 0;
+    if (tool < 0 || static_cast<size_t>(tool) > filament_count)
+        throw std::runtime_error("Model references an unavailable filament");
+    config.reset();
+    if (tool != 0)
+        config.set("extruder", tool);
+}
+
+static bool geometry_only_input_is_stl(const Slic3r::Model& model)
+{
+    bool only_stl = true;
+    for (const auto* object : model.objects) {
+        std::string path = object->input_file;
+        std::transform(path.begin(), path.end(), path.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".3mf") == 0)
+            only_stl = false;
+        else if (path.size() < 4 || path.compare(path.size() - 4, 4, ".stl") != 0)
+            throw std::runtime_error("Geometry-only presets require STL or 3MF input");
+        // Check before copying because the pinned ModelVolume copy omits exterior facets.
+        for (const auto* volume : object->volumes) {
+            if (!volume->is_model_part())
+                throw std::runtime_error("Geometry-only presets do not support modifier or negative volumes");
+            if (volume->is_mm_painted() || volume->is_fdm_support_painted() ||
+                volume->is_seam_painted() || volume->is_fuzzy_skin_painted() ||
+                !volume->exterior_facets.empty())
+                throw std::runtime_error("Geometry-only presets do not support painted volumes");
+        }
+    }
+    return only_stl;
+}
+
+static void prepare_geometry_only_model(Slic3r::Model& model, size_t filament_count)
+{
+    model.plates_custom_gcodes.clear();
+    model.curr_plate_index = 0;
+    model.calib_pa_pattern.reset();
+    for (const auto& material : model.materials)
+        keep_filament_assignment(material.second->config, filament_count);
+    for (auto* object : model.objects) {
+        keep_filament_assignment(object->config, filament_count);
+        object->layer_config_ranges.clear();
+        object->layer_height_profile.clear();
+        object->brim_points.clear();
+        for (auto* volume : object->volumes)
+            keep_filament_assignment(volume->config, filament_count);
+    }
 }
 
 SlicerEngine::SlicerEngine() : pImpl(new Impl()) {
@@ -976,19 +1031,21 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // applyConfigToPrusa runs LAST so that JNI user settings (wipe tower on/off,
         // temperatures, layer height, speeds, etc.) override the embedded profile.
         bool full_profile = false;
+        bool geometry_only = false;
         size_t full_preset_filament_count = 0;
         Slic3r::DynamicPrintConfig dpc;
         {
             std::lock_guard<std::mutex> lock(pImpl->preset_mutex);
             if (pImpl->preset_state == Impl::PresetState::Invalid)
                 throw std::runtime_error("Preset load failed; reset or load a valid preset");
-            full_profile = pImpl->preset_state == Impl::PresetState::Ready;
+            geometry_only = pImpl->preset_state == Impl::PresetState::GeometryOnly;
+            full_profile = geometry_only || pImpl->preset_state == Impl::PresetState::Ready;
             if (full_profile) {
                 dpc = pImpl->full_preset_config;
                 full_preset_filament_count = pImpl->full_preset_filament_count;
             }
         }
-        if (full_profile && !getModelConfig().empty())
+        if (full_profile && !geometry_only && !getModelConfig().empty())
             throw std::runtime_error("Full presets currently require a model without embedded project settings");
         if (!full_profile) dpc.apply(Slic3r::FullPrintConfig::defaults());
         bool is_snapmaker_profile = false;
@@ -1550,8 +1607,16 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         Slic3r::Print print;
 
         // Apply model + config to the print
-        Slic3r::Model& model = getGlobalModel();
-        if (full_profile) {
+        Slic3r::Model& source_model = getGlobalModel();
+        std::optional<Slic3r::Model> geometry_model;
+        bool center_stl = false;
+        if (geometry_only) {
+            center_stl = geometry_only_input_is_stl(source_model);
+            geometry_model.emplace(source_model);
+            prepare_geometry_only_model(*geometry_model, full_preset_filament_count);
+        }
+        Slic3r::Model& model = geometry_model ? *geometry_model : source_model;
+        if (full_profile && !geometry_only) {
             for (const auto* object : model.objects) {
                 std::string path = object->input_file;
                 std::transform(path.begin(), path.end(), path.begin(),
@@ -1575,8 +1640,15 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         // Ensure every object sits on the bed (min z = 0).
         // Per-object ensure_on_bed() is correct: each restructured Bambu build
         // item is an independent printable piece that should touch the bed.
-        for (auto* obj : model.objects) {
-            obj->ensure_on_bed();
+        if (!geometry_only || center_stl) {
+            for (auto* obj : model.objects)
+                obj->ensure_on_bed();
+        }
+        if (center_stl) {
+            const auto* area = dpc.option<Slic3r::ConfigOptionPoints>("printable_area");
+            if (!area || area->values.size() < 3)
+                throw std::runtime_error("Selected printer preset has no printable area");
+            model.center_instances_around_point(Slic3r::BoundingBoxf(area->values).center());
         }
 
         // Auto-center model on bed if outside 0–270mm bounds.
@@ -1896,9 +1968,9 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
             auto loaded = load_full_presets(ini_path);
             pImpl->full_preset_config = std::move(loaded.config);
             pImpl->full_preset_filament_count = loaded.filament_count;
-            pImpl->preset_state = Impl::PresetState::Ready;
+            pImpl->preset_state = loaded.geometry_only ? Impl::PresetState::GeometryOnly : Impl::PresetState::Ready;
             const nlohmann::json event = {
-                {"schema", "orca-native-presets-v1"},
+                {"schema", loaded.geometry_only ? "orca-native-presets-v2" : "orca-native-presets-v1"},
                 {"resolvedInputs", loaded.resolved_inputs},
                 {"filamentCount", loaded.filament_count},
                 {"configKeyCount", pImpl->full_preset_config.keys().size()}

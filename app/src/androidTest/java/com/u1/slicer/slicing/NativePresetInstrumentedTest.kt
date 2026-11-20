@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.NativeLibrary
 import com.u1.slicer.data.SliceConfig
 import com.u1.slicer.gcode.FeatureType
+import com.u1.slicer.gcode.GcodeLayer
 import com.u1.slicer.gcode.GcodeParser
 import com.u1.slicer.gcode.MoveType
 import org.json.JSONArray
@@ -18,6 +19,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /** Runs only with the experimental native engine and pinned preset assets supplied by CI. */
 @RunWith(AndroidJUnit4::class)
@@ -291,6 +294,183 @@ class NativePresetInstrumentedTest {
         val result = native.slice(SliceConfig())
         assertFalse("Full presets must not silently discard embedded project settings",
             result?.success ?: true)
+    }
+
+    @Test fun geometryOnlyProjectUsesPresetsAndPreservesSource() {
+        val project = projectFixture()
+        assertTrue("Controlled project could not load", native.loadModel(project.absolutePath))
+        val sourceConfig = requireNotNull(native.nativeGetProjectConfig())
+        assertEquals("#123456", JSONObject(sourceConfig).getJSONArray("filamentColours").getString(0))
+        assertEquals(1, native.nativeGetVolumeExtruder(0, 0))
+        assertEquals(2, native.nativeGetVolumeExtruder(0, 1))
+        val originalBounds = native.nativeGetObjectWorldAABBMins().toList()
+
+        assertTrue(native.loadProfile(File(bundle, "diagnostic.json").absolutePath))
+        assertFalse("V1 accepted the controlled project", native.slice(SliceConfig())?.success ?: true)
+        val manifest = geometryOnlyManifest()
+        val missingPolicy = File(bundle, "missing-policy.json")
+        missingPolicy.writeText(JSONObject(manifest.readText()).apply { remove("project_settings") }.toString())
+        assertFalse("V2 accepted a missing geometry-only policy", native.loadProfile(missingPolicy.absolutePath))
+        assertFalse("Invalid V2 manifest did not block slicing", native.slice(SliceConfig())?.success ?: true)
+        assertTrue(native.loadProfile(manifest.absolutePath))
+        val result = native.slice(SliceConfig(layerHeight = 0.28f)) ?: error("Missing V2 slice result")
+        assertTrue("Geometry-only slice failed: ${result.errorMessage}", result.success)
+        val gcode = File(result.gcodePath)
+        val config = configBlock(gcode)
+        assertEquals("0.2", config.getString("layer_height"))
+        assertEquals("220,220,220,220", config.getString("nozzle_temperature"))
+        assertEquals("G28\\nG92 E0", config.getString("machine_start_gcode"))
+        assertFalse("Project G-code survived the geometry-only slice", gcode.readText().contains("PROJECT_SENTINEL"))
+
+        val layers = GcodeParser.parse(gcode).layers
+        val moves = layers.flatMap { it.moves }
+        fun toolMoves(tool: Int) = moves.filter { move ->
+            move.type == MoveType.EXTRUDE && move.extruder == tool &&
+                move.featureType != FeatureType.PRIME_TOWER && move.y0 in 129.5f..140.5f &&
+                move.y1 in 129.5f..140.5f
+        }
+        for ((tool, bounds) in listOf(0 to 114.5f..125.5f, 1 to 144.5f..165.5f)) {
+            val printed = toolMoves(tool).filter { it.x0 in bounds && it.x1 in bounds }
+            assertTrue("Tool $tool did not print at the imported placement", printed.isNotEmpty())
+            assertTrue("Tool $tool did not preserve the mesh scaling",
+                printed.maxOf { maxOf(it.x0, it.x1) } - printed.minOf { minOf(it.x0, it.x1) } >
+                    bounds.endInclusive - bounds.start - 2f)
+        }
+        assertEquals(originalBounds, native.nativeGetObjectWorldAABBMins().toList())
+        assertEquals(1, native.nativeGetVolumeExtruder(0, 0))
+        assertEquals(2, native.nativeGetVolumeExtruder(0, 1))
+        assertEquals(sourceConfig, native.nativeGetProjectConfig())
+        assertTrue(native.loadProfile(""))
+        val legacy = native.slice(SliceConfig(extruderCount = 4)) ?: error("Missing legacy slice result")
+        assertTrue("Legacy slice failed after reset: ${legacy.errorMessage}", legacy.success)
+        val legacyGcode = File(legacy.gcodePath).readText()
+        assertTrue("Legacy start G-code was lost", legacyGcode.contains("START_PROJECT_SENTINEL"))
+        assertTrue("Legacy layer G-code was lost", legacyGcode.contains("LAYER_PROJECT_SENTINEL"))
+
+        assertTrue(native.loadModel(projectFixture(overrides = false).absolutePath))
+        assertTrue(native.loadProfile(manifest.absolutePath))
+        val clean = native.slice(SliceConfig()) ?: error("Missing clean slice result")
+        assertTrue("Clean geometry-only slice failed: ${clean.errorMessage}", clean.success)
+        assertEquals("Project overrides changed the number of layers", clean.totalLayers, result.totalLayers)
+        fun withoutLineNumbers(gcodeLayers: List<GcodeLayer>) = gcodeLayers.map { layer ->
+            layer.copy(moves = layer.moves.map { it.copy(lineNumber = -1) })
+        }
+        assertTrue("Project overrides changed the toolpaths",
+            withoutLineNumbers(GcodeParser.parse(File(clean.gcodePath)).layers) == withoutLineNumbers(layers))
+    }
+
+    @Test fun geometryOnlyRejectsPaintAndModifierVolumes() {
+        assertTrue(native.loadProfile(geometryOnlyManifest().absolutePath))
+        for ((subtype, paint, message) in listOf(
+            Triple("normal_part", "4", "painted volumes"),
+            Triple("negative_part", "", "modifier or negative volumes"),
+        )) {
+            assertTrue("Controlled project could not load", native.loadModel(projectFixture(subtype, paint).absolutePath))
+            val result = native.slice(SliceConfig()) ?: error("Missing slice result")
+            assertFalse("Geometry-only accepted $message", result.success)
+            assertTrue(result.errorMessage, result.errorMessage.contains(message))
+        }
+    }
+
+    @Test fun geometryOnlyCentersStlOnSelectedBedWithoutMovingSource() {
+        val originalBounds = native.nativeGetObjectWorldAABBMins().toList()
+        assertTrue(native.loadProfile(geometryOnlyManifest().absolutePath))
+        val result = native.slice(SliceConfig()) ?: error("Missing STL slice result")
+        assertTrue("Geometry-only STL slice failed: ${result.errorMessage}", result.success)
+        val snapshot = diagnostics.readLines().map { JSONObject(it) }
+            .last { it.optString("type") == "slice_pre_process" }
+        val bounds = snapshot.getJSONObject("payload").getJSONObject("worldBounds")
+        assertEquals(135.5, (bounds.getDouble("xMin") + bounds.getDouble("xMax")) / 2, 0.01)
+        assertEquals(136.0, (bounds.getDouble("yMin") + bounds.getDouble("yMax")) / 2, 0.01)
+        assertEquals(0.0, bounds.getDouble("zMin"), 0.01)
+        assertEquals(originalBounds, native.nativeGetObjectWorldAABBMins().toList())
+    }
+
+    private fun geometryOnlyManifest(): File = File(bundle, "geometry-only.json").apply {
+        writeText(JSONObject(File(bundle, "diagnostic.json").readText())
+            .put("schema", "orca-native-presets-v2").put("project_settings", "geometry-only").toString())
+    }
+
+    private fun projectFixture(subtype: String = "normal_part", paint: String = "", overrides: Boolean = true): File {
+        val vertices = listOf("0 0 0", "10 0 0", "10 10 0", "0 10 0",
+            "0 0 10", "10 0 10", "10 10 10", "0 10 10").joinToString("") { xyz ->
+            val (x, y, z) = xyz.split(' ')
+            """<vertex x="$x" y="$y" z="$z"/>"""
+        }
+        val triangles = listOf("0 2 1", "0 3 2", "4 5 6", "4 6 7", "0 1 5", "0 5 4",
+            "1 2 6", "1 6 5", "2 3 7", "2 7 6", "3 0 4", "3 4 7")
+        fun mesh(id: Int, painted: Boolean): String {
+            val faces = triangles.mapIndexed { index, face ->
+                val (a, b, c) = face.split(' ')
+                val attribute = if (painted && index == 0 && paint.isNotEmpty()) """ paint_color="$paint"""" else ""
+                """<triangle v1="$a" v2="$b" v3="$c"$attribute/>"""
+            }.joinToString("")
+            return """<object id="$id" type="model"><mesh><vertices>$vertices</vertices><triangles>$faces</triangles></mesh></object>"""
+        }
+        val model = """
+            <model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+                   xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">
+              <metadata name="Application">BambuStudio-02.00.00.01</metadata>
+              <metadata name="BambuStudio:3mfVersion">1</metadata>
+              <resources>
+                ${mesh(1, false)}
+                ${mesh(2, true)}
+                <object id="3" type="model"><components>
+                  <component objectid="1"/>
+                  <component objectid="2" transform="2 0 0 0 1 0 0 0 1 30 0 0"/>
+                </components></object>
+              </resources>
+              <build><item objectid="3" transform="1 0 0 0 1 0 0 0 1 115 130 0" printable="1"/></build>
+            </model>
+        """.trimIndent()
+        val modelSettings = """
+            <config><object id="3">
+              <metadata key="name" value="Geometry-only test"/>
+              <metadata key="extruder" value="1"/>
+              ${if (overrides) """<metadata key="wall_loops" value="5"/>""" else ""}
+              <part id="1" subtype="normal_part">
+                ${if (overrides) """<metadata key="sparse_infill_density" value="0%"/>""" else ""}
+              </part>
+              <part id="2" subtype="$subtype">
+                <metadata key="extruder" value="2"/>
+                ${if (overrides) """<metadata key="wall_loops" value="4"/>""" else ""}
+              </part>
+            </object></config>
+        """.trimIndent()
+        val projectSettings = JSONObject().put("layer_height", "0.31")
+            .put("nozzle_temperature", JSONArray(listOf("187", "187", "187", "187")))
+            .put("filament_colour", JSONArray().put("#123456"))
+            .put("machine_start_gcode", "; PRINT_START\nM117 START_PROJECT_SENTINEL").toString()
+        val entries = mutableMapOf(
+            "[Content_Types].xml" to """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+                </Types>""".trimIndent(),
+            "_rels/.rels" to """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                <Relationship Target="/3D/3dmodel.model" Id="rel0"
+                    Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+                </Relationships>""".trimIndent(),
+            "3D/3dmodel.model" to model,
+            "Metadata/model_settings.config" to modelSettings,
+        )
+        if (overrides) {
+            entries["Metadata/project_settings.config"] = projectSettings
+            entries["Metadata/layer_heights_profile.txt"] = "object_id=1|0;0.3;10;0.3\n"
+            entries["Metadata/layer_config_ranges.xml"] = """<objects><object id="1"><range min_z="0" max_z="10">
+                <option opt_key="layer_height">0.3</option></range></object></objects>""".trimIndent()
+            entries["Metadata/custom_gcode_per_layer.xml"] = """<custom_gcodes_per_layer>
+                <layer top_z="2" extruder="1" color="" gcode="M117 LAYER_PROJECT_SENTINEL"/>
+                </custom_gcodes_per_layer>""".trimIndent()
+        }
+        return File(bundle, "controlled-$subtype-$paint-$overrides.3mf").apply {
+            ZipOutputStream(outputStream()).use { zip ->
+                for ((path, contents) in entries) {
+                    zip.putNextEntry(ZipEntry(path))
+                    zip.write(contents.toByteArray(Charsets.UTF_8))
+                    zip.closeEntry()
+                }
+            }
+        }
     }
 
     @Test fun wrongTypeTraversalAndCycleFailClosed() {

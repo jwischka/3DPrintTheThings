@@ -10,7 +10,7 @@
 namespace sapil {
 
 struct SlicerEngine::Impl {
-    enum class PresetState { Legacy, Ready, Invalid };
+    enum class PresetState { Legacy, Ready, GeometryOnly, Invalid };
     mutable std::mutex preset_mutex;
     PresetState preset_state = PresetState::Legacy;
     Slic3r::DynamicPrintConfig full_preset_config;

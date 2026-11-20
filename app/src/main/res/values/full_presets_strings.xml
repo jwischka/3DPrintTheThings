@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_presets_title">Full Presets (Experimental)</string>
+    <string name="full_presets_back">Back</string>
+    <string name="full_presets_description">Slice with printer, process, and filament presets from a Full Presets ZIP bundle. A single-plate 3MF keeps its geometry, placement, and supported material assignments. The selected presets replace project settings and custom G-code. Filament slots follow the model’s assignment order.</string>
+    <string name="full_presets_import_bundle">Import preset bundle ZIP</string>
+    <string name="full_presets_bundle">Preset bundle</string>
+    <string name="full_presets_duplicate_bundle_name">%1$s (%2$s)</string>
+    <string name="full_presets_printer">Printer preset</string>
+    <string name="full_presets_process">Process preset</string>
+    <string name="full_presets_filament">Filament slot %1$d</string>
+    <string name="full_presets_add_filament">Add filament slot</string>
+    <string name="full_presets_remove_filament">Remove last slot</string>
+    <string name="full_presets_import_model">Choose STL or 3MF</string>
+    <string name="full_presets_change_model">Change model</string>
+    <string name="full_presets_slice">Slice</string>
+    <string name="full_presets_cancel">Cancel</string>
+    <string name="full_presets_export">Export G-code</string>
+    <string name="full_presets_reading_bundles">Reading preset bundles…</string>
+    <string name="full_presets_importing_bundle">Importing preset bundle…</string>
+    <string name="full_presets_importing_model">Importing model…</string>
+    <string name="full_presets_slicing">Slicing…</string>
+    <string name="full_presets_cancelling">Cancelling slice…</string>
+    <string name="full_presets_exporting">Saving G-code…</string>
+    <string name="full_presets_read_bundles_failed">Could not read imported preset bundles.</string>
+    <string name="full_presets_bundle_import_failed">Could not import the preset bundle.</string>
+    <string name="full_presets_model_import_failed">Could not import the model.</string>
+    <string name="full_presets_document_read_failed">Could not open the selected file.</string>
+    <string name="full_presets_model_type">Select an STL or 3MF file.</string>
+    <string name="full_presets_model_too_large">The model exceeds the 64 MiB import limit.</string>
+    <string name="full_presets_model_empty">The selected model file is empty.</string>
+    <string name="full_presets_3mf_invalid">The 3MF archive is invalid.</string>
+    <string name="full_presets_3mf_too_large">The 3MF archive exceeds the limit of 2,048 entries or 128 MiB of expanded content.</string>
+    <string name="full_presets_engine_unavailable">The experimental slicing engine is unavailable in this build.</string>
+    <string name="full_presets_profile_rejected">The slicing engine rejected the selected preset combination.</string>
+    <string name="full_presets_model_rejected">The slicing engine could not load this model.</string>
+    <string name="full_presets_multiple_plates">Full Presets supports single-plate 3MF files. Choose a file with one plate.</string>
+    <string name="full_presets_slice_failed">Could not slice the model.</string>
+    <string name="full_presets_slice_cancelled">Slice cancelled.</string>
+    <string name="full_presets_output_missing">The generated G-code file is missing or empty.</string>
+    <string name="full_presets_export_failed">Could not save the G-code.</string>
+    <string name="full_presets_gcode_saved">G-code saved.</string>
+    <string name="full_presets_error_detail">%1$s\n%2$s</string>
+    <plurals name="full_presets_slice_complete">
+        <item quantity="one">Slice complete. %1$d layer.</item>
+        <item quantity="other">Slice complete. %1$d layers.</item>
+    </plurals>
+</resources>
