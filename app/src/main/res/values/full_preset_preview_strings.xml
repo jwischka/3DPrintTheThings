@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_presets_preview_loading">Preparing 3D preview…</string>
+    <string name="full_presets_preview_unavailable">3D preview unavailable for this model</string>
+    <string name="full_presets_preview_gestures">3D model. Drag to rotate, drag with two fingers to pan, or pinch to zoom.</string>
+    <string name="full_presets_preview_fit">Fit model to view</string>
+</resources>

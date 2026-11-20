@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="full_presets_title">Full Presets (Experimental)</string>
+    <string name="full_presets_title">Prepare</string>
+    <string name="full_presets_printer_tab">Printer</string>
     <string name="full_presets_back">Back</string>
-    <string name="full_presets_description">Slice with printer, process, and filament presets from a Full Presets ZIP bundle. A single-plate 3MF keeps its geometry, placement, and supported material assignments. The selected presets replace project settings and custom G-code. Filament slots follow the model’s assignment order.</string>
+    <string name="full_presets_description">The selected presets replace project settings and custom G-code. A single-plate 3MF keeps its geometry, placement, and supported material assignments. Set filament slots in the model’s assignment order.</string>
+    <string name="full_presets_setup">Print setup</string>
+    <string name="full_presets_no_preset">No preset bundle selected</string>
+    <string name="full_presets_bundle_help">Import a Full Presets ZIP from OrcaSlicer to choose your printer, process, and filaments.</string>
     <string name="full_presets_import_bundle">Import preset bundle ZIP</string>
     <string name="full_presets_bundle">Preset bundle</string>
     <string name="full_presets_duplicate_bundle_name">%1$s (%2$s)</string>
@@ -11,9 +15,13 @@
     <string name="full_presets_filament">Filament slot %1$d</string>
     <string name="full_presets_add_filament">Add filament slot</string>
     <string name="full_presets_remove_filament">Remove last slot</string>
-    <string name="full_presets_import_model">Choose STL or 3MF</string>
-    <string name="full_presets_change_model">Change model</string>
-    <string name="full_presets_slice">Slice</string>
+    <string name="full_presets_empty_plate">Add a model</string>
+    <string name="full_presets_supported_models">Choose an STL or single-plate 3MF.</string>
+    <string name="full_presets_import_model">Import model</string>
+    <string name="full_presets_change_model">Replace model</string>
+    <string name="full_presets_import_presets">Import presets</string>
+    <string name="full_presets_slice">Slice model</string>
+    <string name="full_presets_slice_again">Slice again</string>
     <string name="full_presets_cancel">Cancel</string>
     <string name="full_presets_export">Export G-code</string>
     <string name="full_presets_reading_bundles">Reading preset bundles…</string>
@@ -40,7 +48,12 @@
     <string name="full_presets_output_missing">The generated G-code file is missing or empty.</string>
     <string name="full_presets_export_failed">Could not save the G-code.</string>
     <string name="full_presets_gcode_saved">G-code saved.</string>
-    <string name="full_presets_error_detail">%1$s\n%2$s</string>
+    <string name="full_presets_error_details">Details</string>
+    <string name="full_presets_done">Done</string>
+    <plurals name="full_presets_slot_count">
+        <item quantity="one">%1$d filament slot</item>
+        <item quantity="other">%1$d filament slots</item>
+    </plurals>
     <plurals name="full_presets_slice_complete">
         <item quantity="one">Slice complete. %1$d layer.</item>
         <item quantity="other">Slice complete. %1$d layers.</item>

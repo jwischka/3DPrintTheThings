@@ -29,7 +29,11 @@ on:
       - 'app/src/main/cpp/**'
       - 'app/src/main/java/com/u1/slicer/viewer/**'
       - 'app/src/main/java/com/u1/slicer/presets/**'
-      - 'app/src/main/java/com/u1/slicer/ui/FullPresetScreen.kt'
+      - 'app/src/main/java/com/u1/slicer/ui/FullPreset*.kt'
+      - 'app/src/main/java/com/u1/slicer/ui/printer/experimental/**'
+      - 'app/src/main/java/com/u1/slicer/network/**'
+      - 'app/src/main/res/values/full_preset*.xml'
+      - 'app/src/main/res/values/experimental_printer_strings.xml'
       - 'app/src/main/java/com/u1/slicer/FullPresetActivity.kt'
       - 'app/src/experimental/**'
       - 'app/src/androidTestExperimental/**'
@@ -237,6 +241,9 @@ jobs:
           emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            # Keep the disposable test process independent of Play Services font-provider restarts.
+            adb shell pm disable-user --user 0 com.google.android.gms
+            adb shell pm list packages -d --user 0 | tr -d '\r' | grep -Fx 'package:com.google.android.gms'
             python3 scripts/native/run-native-instrumentation.py --suite core --app "$RUNNER_TEMP/native-test/app-engine.apk" --test "$RUNNER_TEMP/native-test/test-engine.apk" --log native-slice-report/instrumentation.log --timeout 900
             python3 scripts/native/export-parity-capture.py --output native-slice-report/cube
             python3 tools/parity/parity.py inspect native-slice-report/cube/cube_10mm.android.gcode > native-slice-report/cube/metrics.json
@@ -259,7 +266,7 @@ jobs:
             python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log native-slice-report/preset-ui-instrumentation.log --timeout 900
             adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > native-slice-report/preset-ui-package-abi.txt
             grep -F 'primaryCpuAbi=${{ matrix.abi }}' native-slice-report/preset-ui-package-abi.txt
-            for name in selection result; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
+            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "native-slice-report/screenshots/presets-$name.png" || exit 1; done
       - name: Stop simulator and retain diagnostics
         if: always()
         run: |
@@ -331,15 +338,19 @@ jobs:
           api-level: 35
           target: google_apis_ps16k
           arch: x86_64
+          ram-size: 4096M
           emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            # Keep the disposable test process independent of Play Services font-provider restarts.
+            adb shell pm disable-user --user 0 com.google.android.gms
+            adb shell pm list packages -d --user 0 | tr -d '\r' | grep -Fx 'package:com.google.android.gms'
             adb shell getconf PAGE_SIZE > page-size-report/page-size.txt
             test "$(tr -d '\r\n' < page-size-report/page-size.txt)" = 16384
-            python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log page-size-report/instrumentation.log --timeout 900
+            python3 scripts/native/run-native-instrumentation.py --suite preset-ui --app app/build/outputs/apk/experimental/app-experimental.apk --test app/build/outputs/apk/androidTest/experimental/app-experimental-androidTest.apk --log page-size-report/instrumentation.log --timeout 900 --device-diagnostics page-size-report
             adb shell dumpsys package io.github.jwischka.threedprintthethings.presets > page-size-report/package-abi.txt
             grep -F 'primaryCpuAbi=x86_64' page-size-report/package-abi.txt
-            for name in selection result; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "page-size-report/$name.png" || exit 1; done
+            for name in empty selection settings result preview-stl preview-restored preview-3mf printer-connected printer-temperatures printer-offline layout-landscape layout-landscape-large-text layout-portrait-large-text; do adb exec-out run-as io.github.jwischka.threedprintthethings.presets cat "files/preset-workflow-capture/$name.png" > "page-size-report/$name.png" || exit 1; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

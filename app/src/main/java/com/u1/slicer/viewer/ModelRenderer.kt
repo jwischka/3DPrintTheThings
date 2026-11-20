@@ -3,6 +3,7 @@ package com.u1.slicer.viewer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.opengl.GLES30
@@ -18,7 +19,11 @@ import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
 import kotlin.math.sin
 
-class ModelRenderer(private val context: Context) : GLSurfaceView.Renderer {
+class ModelRenderer(
+    private val context: Context,
+    // A standalone model preview has no printer or bed assigned yet.
+    private val modelPreviewBackground: Int? = null,
+) : GLSurfaceView.Renderer {
 
     val camera = Camera()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -152,31 +157,43 @@ class ModelRenderer(private val context: Context) : GLSurfaceView.Renderer {
         hasPendingObjectMeshRanges = true
     }
 
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES30.glClearColor(0.059f, 0.059f, 0.118f, 1f)
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?): Unit = synchronized(meshOwnershipLock) {
+        if (detached) return@synchronized
+        // GL object names belong to the old context and may be reused in the new context.
+        modelVAOs = IntArray(0)
+        modelVBOs = IntArray(0)
+        colorVBOs = IntArray(0)
+        val background = modelPreviewBackground
+        if (background == null) {
+            GLES30.glClearColor(0.059f, 0.059f, 0.118f, 1f)
+        } else {
+            GLES30.glClearColor(
+                Color.red(background) / 255f,
+                Color.green(background) / 255f,
+                Color.blue(background) / 255f,
+                1f,
+            )
+        }
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_CULL_FACE)
 
         modelShader = ShaderProgram(context, "shaders/model.vert", "shaders/model.frag")
-        gridShader = ShaderProgram(context, "shaders/grid.vert", "shaders/grid.frag")
-        textureShader = ShaderProgram(context, "shaders/texture.vert", "shaders/texture.frag")
-
         useVertexColorLoc = modelShader!!.getUniformLocation("u_UseVertexColor")
 
-        setupBedMesh()
-        setupGrid()
-        setupLogoTexture()
-        setupBox()
+        if (background == null) {
+            gridShader = ShaderProgram(context, "shaders/grid.vert", "shaders/grid.frag")
+            textureShader = ShaderProgram(context, "shaders/texture.vert", "shaders/texture.frag")
+            setupBedMesh()
+            setupGrid()
+            setupLogoTexture()
+            setupBox()
+            resetCameraToDefaultView()
+        }
 
         meshData?.let {
             uploadMeshBatches(it.batches)
             updateColorData(it)
         }
-
-        // Initialize camera to plate-centred view immediately so the first frame is correct.
-        // Without this, the camera starts at default (azimuth=0, elevation=30) and only snaps
-        // to the bed view once the mesh loads, causing a visible flash on first open.
-        resetCameraToDefaultView()
     }
 
     internal fun resetCameraToDefaultView() {
@@ -330,11 +347,15 @@ class ModelRenderer(private val context: Context) : GLSurfaceView.Renderer {
         }
 
         if (pendingCameraReset) {
-            if (meshData != null) {
+            meshData?.let { mesh ->
                 pendingCameraReset = false
-                resetCameraToDefaultView()
-                camera.panX = 0.0
-                camera.panY = 0.0
+                if (modelPreviewBackground == null) {
+                    resetCameraToDefaultView()
+                    camera.panX = 0.0
+                    camera.panY = 0.0
+                } else {
+                    camera.fitModel(mesh, viewportWidth.coerceAtLeast(1), viewportHeight.coerceAtLeast(1))
+                }
             }
         }
 
@@ -345,7 +366,7 @@ class ModelRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
 
-        drawGrid()
+        if (modelPreviewBackground == null) drawGrid()
 
         // Draw model instances
         meshData?.let { mesh ->

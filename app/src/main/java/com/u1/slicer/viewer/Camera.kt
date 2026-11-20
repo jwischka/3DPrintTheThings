@@ -1,8 +1,11 @@
 package com.u1.slicer.viewer
 
 import android.opengl.Matrix
+import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * Orbit camera for 3D model viewing.
@@ -38,6 +41,7 @@ class Camera {
     val mvpMatrix = FloatArray(16)
     val normalMatrix = FloatArray(16)
     private val tempMatrix = FloatArray(16)
+    @Volatile private var zoomRange = 10.0..2000.0
 
     fun setTarget(x: Double, y: Double, z: Double) {
         targetX = x; targetY = y; targetZ = z
@@ -71,7 +75,31 @@ class Camera {
     }
 
     fun zoom(factor: Double) {
-        distance = (distance * factor).coerceIn(10.0, 2000.0)
+        distance = (distance * factor).coerceIn(zoomRange)
+    }
+
+    internal fun fitModel(mesh: MeshData, width: Int, height: Int) {
+        val radius = sqrt(
+            mesh.sizeX.toDouble() * mesh.sizeX +
+                mesh.sizeY.toDouble() * mesh.sizeY +
+                mesh.sizeZ.toDouble() * mesh.sizeZ,
+        ) / 2.0
+        val halfFov = Math.toRadians(FOV_DEGREES / 2.0)
+        val limitingFov = atan(tan(halfFov) * minOf(1.0, width.toDouble() / height))
+        val fittedDistance = (radius / sin(limitingFov) * 1.10).coerceAtLeast(2.0)
+        zoomRange = maxOf(1.5, fittedDistance / 8.0)..(fittedDistance * 10.0)
+        restore(
+            CameraViewState(
+                azimuth = -45.0,
+                elevation = 32.0,
+                distance = fittedDistance,
+                panX = 0.0,
+                panY = 0.0,
+                targetX = mesh.centerX.toDouble(),
+                targetY = mesh.centerY.toDouble(),
+                targetZ = mesh.centerZ.toDouble(),
+            ),
+        )
     }
 
     fun pan(dx: Double, dy: Double) {
@@ -108,7 +136,7 @@ class Camera {
         val aspect = width.toFloat() / height.toFloat()
         val near = (distance * 0.05).coerceAtLeast(1.0).toFloat()
         val far = (distance * 5.0).toFloat()
-        Matrix.perspectiveM(projectionMatrix, 0, 45f, aspect, near, far)
+        Matrix.perspectiveM(projectionMatrix, 0, FOV_DEGREES, aspect, near, far)
     }
 
     fun computeMVP(modelMatrix: FloatArray = IDENTITY) {
@@ -127,6 +155,7 @@ class Camera {
     }
 
     companion object {
+        private const val FOV_DEGREES = 45f
         val IDENTITY = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     }
 }

@@ -87,40 +87,25 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
      * Mirrors the bridge's moonraker.py get_webcams() + _resolve_moonraker_url() logic.
      * Always appends monitor.jpg as a final fallback candidate.
      */
-    suspend fun queryWebcamSnapshotCandidates(): List<String> = withContext(Dispatchers.IO) {
-        if (baseUrl.isBlank()) return@withContext emptyList()
+    suspend fun queryWebcamSnapshotCandidates(): List<String> {
+        if (baseUrl.isBlank()) return emptyList()
         val monitorUrl = "$baseUrl/server/files/camera/monitor.jpg"
-        try {
-            val request = Request.Builder().url(url("/server/webcams/list")).get().build()
-            val response = client.newCall(request).execute()
-            val body = response.body?.string()
-            response.close()
-            if (response.isSuccessful && body != null) {
-                val webcams = org.json.JSONObject(body)
-                    .getJSONObject("result")
-                    .getJSONArray("webcams")
-                if (webcams.length() > 0) {
-                    val cam = webcams.getJSONObject(0)
-                    val rawUrl = cam.optString("snapshot_url", "")
-                        .ifBlank { cam.optString("snapshotUrl", "") }
-                    if (rawUrl.isNotBlank()) {
-                        val primary = resolveWebcamUrl(rawUrl, keepPort = false)
-                        val alt = resolveWebcamUrl(rawUrl, keepPort = true)
-                        val candidates = listOfNotNull(
-                            primary.ifBlank { null },
-                            alt.takeIf { it.isNotBlank() && it != primary }
-                        )
-                        if (candidates.isNotEmpty()) {
-                            return@withContext candidates + monitorUrl
-                        }
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            Log.d(TAG, "Webcam list unavailable, using legacy fallback")
+        val reply = MoonrakerJsonRead(client).get(url("/server/webcams/list"))
+        val webcams = (reply as? MoonrakerJsonRead.Reply.Success)
+            ?.json?.optJSONObject("result")?.optJSONArray("webcams")
+        for (index in 0 until (webcams?.length() ?: 0)) {
+            val webcam = webcams?.optJSONObject(index) ?: continue
+            if (!webcam.optBoolean("enabled", true)) continue
+            val rawUrl = (webcam.opt("snapshot_url") as? String).orEmpty()
+                .ifBlank { (webcam.opt("snapshotUrl") as? String).orEmpty() }
+            if (rawUrl.isBlank()) continue
+            val primary = resolveWebcamUrl(rawUrl, keepPort = false)
+            val alternate = resolveWebcamUrl(rawUrl, keepPort = true)
+            val candidates = listOf(primary, alternate, monitorUrl).filter(String::isNotBlank).distinct()
+            return candidates
         }
         // Legacy fallback: mjpeg-streamer style + monitor.jpg
-        listOf("$baseUrl/webcam/?action=snapshot", monitorUrl)
+        return listOf("$baseUrl/webcam/?action=snapshot", monitorUrl)
     }
 
     /**
@@ -296,13 +281,32 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
      */
     suspend fun probeRemoteScreen(): Boolean = remoteScreenProber.probe(remoteScreenUrl())
 
+    /** Read-only monitoring data, independent of the print-start preflight. */
+    internal suspend fun readStatusSnapshot(): MoonrakerStatusResult {
+        val objects = "webhooks&display_status&toolhead&${MoonrakerStatusSnapshot.COMMON_OBJECTS}"
+        return when (val reply = MoonrakerJsonRead(client).get(url("/printer/objects/query?$objects"))) {
+            is MoonrakerJsonRead.Reply.Failure ->
+                MoonrakerStatusResult.Unavailable(reply.problem, reply.statusCode)
+            is MoonrakerJsonRead.Reply.Success -> {
+                val status = reply.json.optJSONObject("result")?.optJSONObject("status")
+                    ?: return MoonrakerStatusResult.Unavailable(MoonrakerJsonRead.Problem.MALFORMED)
+                val snapshot = MoonrakerStatusSnapshot.parse(status)
+                if (snapshot.klippyState == null && snapshot.printState == null) {
+                    MoonrakerStatusResult.Unavailable(MoonrakerJsonRead.Problem.MALFORMED)
+                } else {
+                    MoonrakerStatusResult.Received(snapshot)
+                }
+            }
+        }
+    }
+
     /**
      * Get printer status: temps, state, progress.
      */
     suspend fun getStatus(): PrinterStatus = withContext(Dispatchers.IO) {
         if (baseUrl.isBlank()) return@withContext PrinterStatus(state = "disconnected", progress = 0f)
         try {
-            val queryParams = "print_stats&virtual_sdcard&heater_bed&extruder&extruder1&extruder2&extruder3"
+            val queryParams = MoonrakerStatusSnapshot.COMMON_OBJECTS
             val request = Request.Builder()
                 .url(url("/printer/objects/query?$queryParams"))
                 .get().build()
@@ -317,48 +321,7 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
             val result = json.optJSONObject("result")?.optJSONObject("status")
                 ?: return@withContext PrinterStatus(state = "standby", progress = 0f)
 
-            val printStats = result.optJSONObject("print_stats")
-            val virtualSdcard = result.optJSONObject("virtual_sdcard")
-            val heaterBed = result.optJSONObject("heater_bed")
-            val extruder = result.optJSONObject("extruder")
-
-            // Parse extruders 1-3
-            val extruders = mutableListOf<ExtruderStatus>()
-            extruder?.let {
-                extruders.add(ExtruderStatus(0,
-                    it.optDouble("temperature", 0.0).toFloat(),
-                    it.optDouble("target", 0.0).toFloat(),
-                    it.optDouble("target", 0.0) > 0
-                ))
-            }
-            for (i in 1..3) {
-                result.optJSONObject("extruder$i")?.let {
-                    extruders.add(ExtruderStatus(i,
-                        it.optDouble("temperature", 0.0).toFloat(),
-                        it.optDouble("target", 0.0).toFloat(),
-                        it.optDouble("target", 0.0) > 0
-                    ))
-                }
-            }
-
-            // Prefer virtual_sdcard.progress — it tracks actual file read position and
-            // stays accurate throughout the print.  print_stats.progress can stick at 0
-            // on some Moonraker/Klipper builds (B33).  Fall back to print_stats.progress
-            // if virtual_sdcard is absent (older firmware).
-            val progress = (virtualSdcard?.optDouble("progress")
-                ?: printStats?.optDouble("progress"))?.toFloat() ?: 0f
-            PrinterStatus(
-                state = printStats?.optString("state", "standby") ?: "standby",
-                progress = progress,
-                filename = printStats?.optString("filename", "") ?: "",
-                printDuration = printStats?.optDouble("print_duration", 0.0)?.toFloat() ?: 0f,
-                filamentUsed = printStats?.optDouble("filament_used", 0.0)?.toFloat() ?: 0f,
-                nozzleTemp = extruder?.optDouble("temperature", 0.0)?.toFloat() ?: 0f,
-                nozzleTarget = extruder?.optDouble("target", 0.0)?.toFloat() ?: 0f,
-                bedTemp = heaterBed?.optDouble("temperature", 0.0)?.toFloat() ?: 0f,
-                bedTarget = heaterBed?.optDouble("target", 0.0)?.toFloat() ?: 0f,
-                extruders = extruders
-            )
+            MoonrakerStatusSnapshot.parse(result).asLegacyStatus()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to get status")
             PrinterStatus(state = "disconnected", progress = 0f)

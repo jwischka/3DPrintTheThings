@@ -1,26 +1,30 @@
 package com.u1.slicer.library
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.printToString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.nio.file.Files
-import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
 
 @RunWith(AndroidJUnit4::class)
 class LibraryScreenInstrumentedTest {
@@ -40,9 +44,7 @@ class LibraryScreenInstrumentedTest {
                 runBlocking { store.listing().entries.map { it.provenance.title }.toSet() })
             val restoration = StateRestorationTester(compose)
             restoration.setContent { LibraryScreen(store, onOpen = {}, onBack = {}) }
-            compose.waitUntil(5_000) {
-                compose.onAllNodesWithText("Blue Model").fetchSemanticsNodes().isNotEmpty()
-            }
+            awaitModel("Blue Model", store)
             compose.onNodeWithText("Search library").performTextInput("Blue")
             compose.onNodeWithText("Name").performClick()
             compose.onNodeWithText("Name").assertIsSelected()
@@ -50,9 +52,7 @@ class LibraryScreenInstrumentedTest {
             compose.onNodeWithText("Red Model").assertDoesNotExist()
 
             restoration.emulateSavedInstanceStateRestore()
-            compose.waitUntil(5_000) {
-                compose.onAllNodesWithText("Blue Model").fetchSemanticsNodes().isNotEmpty()
-            }
+            awaitModel("Blue Model", store)
             compose.onNodeWithText("Red Model").assertDoesNotExist()
             compose.onNodeWithText("Blue").assertExists()
             compose.onNodeWithText("Name").assertIsSelected()
@@ -77,12 +77,12 @@ class LibraryScreenInstrumentedTest {
                     LibraryScreen(store, onOpen = {}, onBack = {})
                 }
             }
-            compose.waitUntil(5_000) { compose.onAllNodesWithText("First Model").fetchSemanticsNodes().isNotEmpty() }
+            awaitModel("First Model", store)
             val second = File(files, "second.stl").apply { writeText("solid second\nendsolid second") }
             runBlocking { store.importFile(second, "second.stl", DownloadProvenance("local", "", "Second Model")) }
             compose.onNodeWithText("Second Model").assertDoesNotExist()
             compose.runOnIdle { owner.registry.currentState = Lifecycle.State.RESUMED }
-            compose.waitUntil(5_000) { compose.onAllNodesWithText("Second Model").fetchSemanticsNodes().isNotEmpty() }
+            awaitModel("Second Model", store, timeoutMillis = 5_000)
         } finally { files.deleteRecursively() }
     }
 
@@ -103,10 +103,33 @@ class LibraryScreenInstrumentedTest {
             compose.setContent {
                 LibraryScreen(reopened, onOpen = {}, onBack = {}, onRetryFromSource = { retried = it })
             }
-            compose.waitUntil(5_000) { compose.onAllNodesWithText("Lost Model").fetchSemanticsNodes().isNotEmpty() }
+            awaitModel("Lost Model", reopened)
             compose.onNodeWithText("Open").assertDoesNotExist()
             compose.onNodeWithText("Find download again").performClick()
             compose.runOnIdle { assertEquals("https://www.printables.com/model/42", retried) }
         } finally { files.deleteRecursively() }
+    }
+
+    // Initial rendering depends on real IO and emulator frame scheduling after the content is attached.
+    private fun awaitModel(title: String, store: DownloadStore, timeoutMillis: Long = 20_000) {
+        val models = compose.onAllNodesWithText(title)
+        try {
+            compose.waitUntil(timeoutMillis) { models.fetchSemanticsNodes().isNotEmpty() }
+        } catch (timeout: ComposeTimeoutException) {
+            val storeState = runCatching {
+                runBlocking {
+                    withTimeout(2_000) {
+                        val listing = store.listing()
+                        val stored = listing.entries.map { it.provenance.title }
+                        val recoverable = store.recoverableDownloads().map { it.provenance.title }
+                        "Stored models: $stored\nRecoverable models: $recoverable\nUnreadable entries: ${listing.unreadableEntries}"
+                    }
+                }
+            }.getOrElse { "Unable to read test library: $it" }
+            val tree = runCatching {
+                compose.onRoot(useUnmergedTree = true).printToString(maxDepth = 8).take(8_192)
+            }.getOrElse { "Unable to read Compose semantics: $it" }
+            throw AssertionError("Expected \"$title\" within $timeoutMillis ms.\n$storeState\n$tree", timeout)
+        }
     }
 }

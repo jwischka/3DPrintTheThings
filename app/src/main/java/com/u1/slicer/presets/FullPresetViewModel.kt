@@ -11,6 +11,8 @@ import com.u1.slicer.R
 import com.u1.slicer.data.ModelFileNaming
 import com.u1.slicer.data.SliceConfig
 import com.u1.slicer.data.SliceResult
+import com.u1.slicer.presets.preview.FullPresetPreview
+import com.u1.slicer.presets.preview.FullPresetPreviewLoader
 import java.io.File
 import java.io.IOException
 import java.util.Locale
@@ -60,6 +62,7 @@ internal data class FullPresetUiState(
     val bundleId: String? = null,
     val selection: FullPresetSelection? = null,
     val model: FullPresetModel? = null,
+    val preview: FullPresetPreview = FullPresetPreview.Empty,
     val output: FullPresetOutput? = null,
     val operation: FullPresetOperation? = null,
     val progress: Int? = null,
@@ -148,11 +151,29 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
 
     fun importModel(uri: Uri) {
         runOperation(FullPresetOperation.IMPORTING_MODEL, R.string.full_presets_model_import_failed) {
-            val oldModel = state.value.model
-            val model = withContext(Dispatchers.IO) {
-                copyModel(uri).also { oldModel?.file?.parentFile?.deleteRecursively() }
+            val previous = state.value
+            mutableState.update { it.copy(preview = FullPresetPreview.Loading) }
+            try {
+                val (model, preview) = withContext(Dispatchers.IO) {
+                    val imported = copyModel(uri)
+                    var complete = false
+                    try {
+                        val preview = FullPresetPreviewLoader.load(imported.file)
+                        complete = true
+                        imported to preview
+                    } finally {
+                        if (!complete) imported.file.parentFile?.deleteRecursively()
+                    }
+                }
+                mutableState.update { it.copy(model = model, preview = preview) }
+                withContext(Dispatchers.IO) { previous.model?.file?.parentFile?.deleteRecursively() }
+            } catch (error: FullPresetPreviewLoader.InvalidModel) {
+                throw WorkflowFailure(error.reason)
+            } finally {
+                mutableState.update {
+                    if (it.preview == FullPresetPreview.Loading) it.copy(preview = previous.preview) else it
+                }
             }
-            mutableState.update { it.copy(model = model) }
         }
     }
 

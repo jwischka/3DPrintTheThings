@@ -7,10 +7,17 @@ normal APK retains its inherited native library. The experimental build selects
 this manifest format in its dedicated slicing workflow.
 
 The `experimental` Android build is a separately installed application with the
-`.presets` application ID suffix. Its launcher owns a dedicated model and preset
-workflow; the regular application's settings, printer connections and native scene
-are not initialized. The build requires an explicit engine directory, verifies
-the ABI and checksums, and never falls back to the inherited native libraries.
+`.presets` application ID suffix, a dedicated launcher, and separate application
+storage. The build requires an explicit engine directory and verifies the ABI
+and checksums before packaging the selected libraries.
+
+## Prepare workspace
+
+The Prepare tab brings together the imported model, print setup, and slice
+result. A settings sheet selects the bundle, printer, process, and ordered
+filament slots. The workspace stacks these panels on narrow displays and puts
+the model and setup side by side on wider displays. Android's document picker
+handles preset import, model import, and G-code export.
 
 Preset import accepts a ZIP containing `manifest.json` at its root and exactly
 the referenced JSON files. Archive and expanded sizes, individual files, entry
@@ -20,13 +27,43 @@ Printer, process and ordered filament selections produce a separate v2 manifest
 with its required parent closure. The original catalog remains available for
 later selections. Selections saved when slicing persist across application recreation.
 
-The screen explicitly describes the geometry-only policy. It imports one STL or
-single-plate 3MF, runs the native load and slice sequence under the native scene
-mutex, then exports the result through Android's document picker. It does not
-apply the regular application's settings or G-code header patches. Changing
+Import copies one STL or single-plate 3MF to private cache storage. Preview
+extraction holds the native scene mutex while loading the file and copying
+render batches into Android-owned buffers. The native preview scene is released
+before the live model is cleared and the mutex is returned. These buffers
+preserve 3MF transforms and file-indexed filament colors and can be uploaded
+again after EGL context loss. The viewport fits the model and supports orbit,
+pan, and zoom. A rejected replacement leaves the previous model available.
+A display-budget or preview export failure leaves the imported file available
+for slicing.
+
+Slicing reloads the cached source under the same mutex and uses the selected
+geometry-only manifest. Export copies the generated G-code bytes. Changing
 inputs or encountering a failed import or slice clears the exportable result.
 Cancellation keeps the workflow busy until the native operation returns and its
 model and profile state have been reset.
+
+## Printer tab
+
+The Printer tab monitors a separately configured Moonraker endpoint with HTTP
+GET requests. Job progress prefers the reported display progress, including
+M73 updates, then file progress and the job status value. The dashboard shows
+elapsed time, printer-reported remaining time, layer counts, and bed and tool
+temperatures when available. Polling runs while the tab is visible and the
+activity is started. Failed polls retain the last reported readings with a
+stale indication. Editing the endpoint or key restarts monitoring with a new
+connection.
+
+Camera snapshots use Moonraker discovery and same-host fallback URLs,
+including the printer's web port. The dashboard reuses a working URL until it
+fails, bounds response and decode sizes, and timestamps receipt of a
+snapshot. The `monitor.jpg` fallback can serve a cached image with unknown
+capture time. The optional API key uses the private no-backup store and
+attaches only within the configured scheme, host, port, and path prefix.
+Monitoring requests disable redirects. Shared credential and endpoint rules
+are documented under [Moonraker connections and transfers](printer-connection.md).
+
+## Manifest and slicing
 
 A v1 JSON manifest has exactly five fields: `schema` (`orca-native-presets-v1`),
 `printer`, `process`, `filaments` (ordered filenames), and `catalog` (inherited

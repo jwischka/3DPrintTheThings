@@ -3,253 +3,193 @@ package com.u1.slicer.ui
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.outlined.Print
+import androidx.compose.material.icons.outlined.ViewInAr
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.u1.slicer.R
-import com.u1.slicer.presets.FullPresetOperation
-import com.u1.slicer.presets.FullPresetStore
 import com.u1.slicer.presets.FullPresetViewModel
+import com.u1.slicer.ui.printer.experimental.ExperimentalPrinterDashboard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FullPresetScreen(onBack: () -> Unit) {
+internal fun FullPresetScreen(onBack: () -> Unit) {
     val model: FullPresetViewModel = viewModel()
     val state by model.state.collectAsState()
     val enabled = state.operation == null
-    val bundle = state.bundle
-    val selection = state.selection
-    val importedModel = state.model
-    val output = state.output
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    var showPrinter by rememberSaveable { mutableStateOf(false) }
+    val savedContent = rememberSaveableStateHolder()
+    val screen = LocalConfiguration.current
+    val splitWorkspace = screen.screenWidthDp >= 840 ||
+        (screen.screenWidthDp >= 600 && screen.screenWidthDp > screen.screenHeightDp)
 
-    val importBundle = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+    val bundleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         it?.let(model::importBundle)
     }
-    val importModel = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+    val modelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         it?.let(model::importModel)
     }
-    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) {
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) {
         it?.let(model::exportGcode)
     }
+    val importModel = { modelLauncher.launch(arrayOf("*/*")) }
+    val importBundle = { bundleLauncher.launch(arrayOf("*/*")) }
+    val primaryActions: @Composable () -> Unit = {
+        PrepareActionBar(
+            state = state,
+            onImportModel = importModel,
+            onImportBundle = importBundle,
+            onSlice = model::slice,
+            onCancel = model::cancelSlice,
+            onExport = { exportLauncher.launch(it) },
+        )
+    }
 
-    BackHandler { if (enabled) onBack() }
+    val navigateBack: () -> Unit = {
+        if (showPrinter) showPrinter = false
+        else if (enabled) onBack()
+    }
+    BackHandler(enabled = !settingsOpen, onBack = navigateBack)
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.full_presets_title)) },
+                title = {
+                    Text(
+                        stringResource(if (showPrinter) R.string.full_presets_printer_tab else R.string.full_presets_title),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.semantics { heading() },
+                    )
+                },
+                windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                 navigationIcon = {
-                    IconButton(onClick = onBack, enabled = enabled) {
+                    IconButton(onClick = navigateBack, enabled = showPrinter || enabled) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.full_presets_back))
                     }
                 },
             )
         },
+        bottomBar = {
+            Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) {
+                Column(
+                    modifier = Modifier.windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
+                    ),
+                ) {
+                    if (!showPrinter && !splitWorkspace) primaryActions()
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    FullPresetNavigation(showPrinter, onSelectPrinter = { showPrinter = it })
+                }
+            }
+        },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            Text(stringResource(R.string.full_presets_description), style = MaterialTheme.typography.bodyMedium)
-            OutlinedButton(
-                onClick = { importBundle.launch(arrayOf("*/*")) },
-                enabled = enabled,
-                modifier = Modifier.testTag("full-presets-import-bundle"),
-            ) {
-                Text(stringResource(R.string.full_presets_import_bundle))
-            }
-            if (state.bundles.isNotEmpty()) {
-                val nameCounts = remember(state.bundles) { state.bundles.groupingBy { it.displayName }.eachCount() }
-                PresetPicker(
-                    tag = "full-presets-bundle",
-                    label = stringResource(R.string.full_presets_bundle),
-                    selected = state.bundleId,
-                    entries = state.bundles.map {
-                        val name = if (nameCounts.getValue(it.displayName) > 1) {
-                            stringResource(R.string.full_presets_duplicate_bundle_name, it.displayName, it.id.take(8))
-                        } else it.displayName
-                        it.id to name
-                    },
-                    enabled = enabled,
-                    onSelect = model::selectBundle,
-                )
-            }
-            if (bundle != null && selection != null) {
-                val selectable = remember(bundle) {
-                    bundle.catalog.filter { it.isSelectable }.groupBy { it.category }
-                        .mapValues { (_, presets) -> presets.map { it.path to it.name } }
+            if (showPrinter) {
+                savedContent.SaveableStateProvider("printer") {
+                    ExperimentalPrinterDashboard(Modifier.widthIn(max = 1120.dp).fillMaxSize())
                 }
-                PresetPicker(
-                    tag = "full-presets-printer",
-                    label = stringResource(R.string.full_presets_printer),
-                    selected = selection.printer,
-                    entries = selectable[FullPresetStore.Category.PRINTER].orEmpty(),
-                    enabled = enabled,
-                    onSelect = model::selectPrinter,
-                )
-                PresetPicker(
-                    tag = "full-presets-process",
-                    label = stringResource(R.string.full_presets_process),
-                    selected = selection.process,
-                    entries = selectable[FullPresetStore.Category.PROCESS].orEmpty(),
-                    enabled = enabled,
-                    onSelect = model::selectProcess,
-                )
-                selection.filaments.forEachIndexed { index, path ->
-                    PresetPicker(
-                        tag = "full-presets-filament-${index + 1}",
-                        label = stringResource(R.string.full_presets_filament, index + 1),
-                        selected = path,
-                        entries = selectable[FullPresetStore.Category.FILAMENT].orEmpty(),
-                        enabled = enabled,
-                        onSelect = { model.selectFilament(index, it) },
+            } else {
+                savedContent.SaveableStateProvider("prepare") {
+                    PrepareWorkspace(
+                        state = state,
+                        onImportModel = importModel,
+                        onOpenSettings = { settingsOpen = true },
+                        onSliceAgain = model::slice,
+                        sideActions = primaryActions.takeIf { splitWorkspace },
                     )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = model::addFilament,
-                        enabled = enabled && selection.filaments.size < FullPresetViewModel.MAX_FILAMENTS,
-                        modifier = Modifier.weight(1f).testTag("full-presets-add-filament"),
-                    ) {
-                        Text(stringResource(R.string.full_presets_add_filament))
-                    }
-                    OutlinedButton(
-                        onClick = model::removeLastFilament,
-                        enabled = enabled && selection.filaments.size > 1,
-                        modifier = Modifier.weight(1f).testTag("full-presets-remove-filament"),
-                    ) {
-                        Text(stringResource(R.string.full_presets_remove_filament))
-                    }
-                }
-            }
-            OutlinedButton(
-                onClick = { importModel.launch(arrayOf("*/*")) },
-                enabled = enabled,
-                modifier = Modifier.testTag("full-presets-import-model"),
-            ) {
-                Text(stringResource(if (importedModel == null) R.string.full_presets_import_model else R.string.full_presets_change_model))
-            }
-            importedModel?.let { Text(it.name, style = MaterialTheme.typography.bodyMedium) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = model::slice,
-                    enabled = enabled && bundle != null && selection != null && importedModel != null,
-                    modifier = Modifier.testTag("full-presets-slice"),
-                ) {
-                    Text(stringResource(R.string.full_presets_slice))
-                }
-                if (state.operation == FullPresetOperation.SLICING || state.operation == FullPresetOperation.CANCELLING) {
-                    OutlinedButton(
-                        onClick = model::cancelSlice,
-                        enabled = state.operation == FullPresetOperation.SLICING,
-                        modifier = Modifier.testTag("full-presets-cancel"),
-                    ) {
-                        Text(stringResource(R.string.full_presets_cancel))
-                    }
-                }
-            }
-            state.operation?.let { operation ->
-                val progress = state.progress
-                if (progress == null) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
-                }
-                Text(stringResource(operation.label), style = MaterialTheme.typography.bodyMedium)
-            }
-            state.error?.let { notice ->
-                val message = notice.detail?.let {
-                    stringResource(R.string.full_presets_error_detail, stringResource(notice.message), it)
-                } ?: stringResource(notice.message)
-                Text(message, color = MaterialTheme.colorScheme.error)
-            }
-            state.status?.let { Text(stringResource(it), style = MaterialTheme.typography.bodyMedium) }
-            if (output != null) {
-                val layers = output.result.totalLayers
-                Text(pluralStringResource(R.plurals.full_presets_slice_complete, layers, layers))
-                Button(
-                    onClick = { export.launch(output.filename) },
-                    enabled = enabled,
-                    modifier = Modifier.testTag("full-presets-export"),
-                ) {
-                    Text(stringResource(R.string.full_presets_export))
                 }
             }
         }
     }
+    if (settingsOpen) {
+        FullPresetSettingsSheet(
+            state = state,
+            viewModel = model,
+            onImportBundle = {
+                settingsOpen = false
+                importBundle()
+            },
+            onDismiss = { settingsOpen = false },
+        )
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PresetPicker(
-    tag: String,
-    label: String,
-    selected: String?,
-    entries: List<Pair<String, String>>,
-    enabled: Boolean,
-    onSelect: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = enabled && expanded,
-        onExpandedChange = { if (enabled) expanded = it },
+private fun FullPresetNavigation(showPrinter: Boolean, onSelectPrinter: (Boolean) -> Unit) {
+    val height = 64.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.4f)
+    val colors = NavigationBarItemDefaults.colors(
+        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        selectedTextColor = MaterialTheme.colorScheme.primary,
+        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+    )
+    NavigationBar(
+        modifier = Modifier.height(height),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        windowInsets = WindowInsets(0, 0, 0, 0),
     ) {
-        OutlinedTextField(
-            value = entries.firstOrNull { it.first == selected }?.second.orEmpty(),
-            onValueChange = {},
-            label = { Text(label) },
-            readOnly = true,
-            enabled = enabled,
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(enabled && expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth().testTag(tag),
+        NavigationBarItem(
+            selected = !showPrinter,
+            onClick = { onSelectPrinter(false) },
+            icon = { Icon(Icons.Outlined.ViewInAr, contentDescription = null) },
+            label = { Text(stringResource(R.string.full_presets_title)) },
+            colors = colors,
+            modifier = Modifier.testTag("full-presets-tab-prepare"),
         )
-        ExposedDropdownMenu(expanded = enabled && expanded, onDismissRequest = { expanded = false }) {
-            entries.forEach { (id, name) ->
-                DropdownMenuItem(
-                    text = { Text(name) },
-                    modifier = Modifier.testTag("$tag-option-$id"),
-                    onClick = {
-                        expanded = false
-                        onSelect(id)
-                    },
-                )
-            }
-        }
+        NavigationBarItem(
+            selected = showPrinter,
+            onClick = { onSelectPrinter(true) },
+            icon = { Icon(Icons.Outlined.Print, contentDescription = null) },
+            label = { Text(stringResource(R.string.full_presets_printer_tab)) },
+            colors = colors,
+            modifier = Modifier.testTag("full-presets-tab-printer"),
+        )
     }
 }

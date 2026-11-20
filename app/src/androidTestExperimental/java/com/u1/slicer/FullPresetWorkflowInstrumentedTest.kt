@@ -1,7 +1,7 @@
 package com.u1.slicer
 
-import android.net.Uri
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -60,14 +60,22 @@ class FullPresetWorkflowInstrumentedTest {
                 scenario.onActivity { model.action() }
                 idle()
             }
+            fun openSettings() {
+                compose.onNodeWithTag("full-presets-settings").performScrollTo().assertIsEnabled().performClick()
+            }
+            fun closeSettings() {
+                compose.onNodeWithTag("full-presets-settings-done").assertIsEnabled().performClick()
+            }
             fun slice() {
-                compose.onNodeWithTag("full-presets-slice").performScrollTo().assertIsEnabled().performClick()
+                compose.onNodeWithTag("full-presets-slice").assertIsEnabled().performClick()
                 idle()
                 noError()
                 assertNotNull("Slice completed without an exportable result", model.state.value.output)
-                compose.onNodeWithTag("full-presets-export").performScrollTo().assertIsEnabled()
+                compose.onNodeWithTag("full-presets-export").assertIsEnabled()
             }
             idle()
+            compose.onNodeWithTag("full-presets-import-model").assertIsEnabled()
+            screenshot("empty")
             act { importBundle(actual) }
             noError()
             val firstBundle = requireNotNull(model.state.value.bundleId)
@@ -78,9 +86,13 @@ class FullPresetWorkflowInstrumentedTest {
             assertEquals(4, model.state.value.selection?.filaments?.size)
             act { importModel(cube) }
             noError()
-            compose.onNodeWithTag("full-presets-import-bundle").performScrollTo().assertIsEnabled()
             screenshot("selection")
+            openSettings()
+            screenshot("settings")
+            compose.onNodeWithTag("full-presets-import-bundle").performScrollTo().assertIsEnabled()
+            closeSettings()
             slice()
+            compose.onNodeWithTag("full-presets-result").performScrollTo()
             screenshot("result")
             val firstResult = requireNotNull(model.state.value.output).result
             assertEquals(50, firstResult.totalLayers)
@@ -96,15 +108,18 @@ class FullPresetWorkflowInstrumentedTest {
             assertNull("Failed import retained an exportable old slice", model.state.value.output)
             assertEquals(originalIds.size + 2, store.list().size)
 
+            openSettings()
             repeat(3) {
                 compose.onNodeWithTag("full-presets-remove-filament").performScrollTo().performClick()
             }
             assertEquals(1, model.state.value.selection?.filaments?.size)
+            closeSettings()
             slice()
             val oneSlot = requireNotNull(model.state.value.output).result
             assertTrue(File(oneSlot.gcodePath).readText().contains("; filament_flow_ratio = 0.98\n"))
             val selectedId = requireNotNull(model.state.value.bundleId)
             assertEquals(1, FullPresetStore(File(context.noBackupFilesDir, "full-presets")).get(selectedId)?.filaments?.size)
+            openSettings()
             compose.onNodeWithTag("full-presets-bundle").performScrollTo().performClick()
             compose.onNodeWithTag("full-presets-bundle-option-$firstBundle").performClick()
             assertNull("Changing presets retained a stale result", model.state.value.output)

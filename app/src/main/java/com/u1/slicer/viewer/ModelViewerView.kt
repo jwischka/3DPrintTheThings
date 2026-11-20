@@ -7,7 +7,10 @@ import android.view.MotionEvent
 import android.view.PixelCopy
 import android.view.ViewConfiguration
 
-class ModelViewerView(context: Context) : BaseGLViewerView(context) {
+class ModelViewerView(
+    context: Context,
+    modelPreviewBackground: Int? = null,
+) : BaseGLViewerView(context) {
 
     internal companion object {
         fun resolveDragTarget(
@@ -51,7 +54,7 @@ class ModelViewerView(context: Context) : BaseGLViewerView(context) {
         }
     }
 
-    val renderer = ModelRenderer(context)
+    val renderer = ModelRenderer(context, modelPreviewBackground)
     override val camera: Camera get() = renderer.camera
 
     // Placement mode: when true, single-finger drag moves objects on the bed
