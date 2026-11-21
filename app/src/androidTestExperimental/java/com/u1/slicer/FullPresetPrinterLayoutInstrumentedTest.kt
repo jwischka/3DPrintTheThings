@@ -88,7 +88,8 @@ class FullPresetPrinterLayoutInstrumentedTest {
                         waitForLandscape(scenario, automation)
                         shell(automation, "settings --user current put system font_scale 1.5")
                         waitForLandscape(scenario, automation, fontScale = 1.5f)
-                        compose.onNodeWithTag("full-presets-tab-printer").assertIsDisplayed().performClick()
+                        compose.onNodeWithTag("full-presets-tab-printer")
+                            .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
                         compose.waitUntil(20_000) {
                             compose.onAllNodesWithTag("experimental-printer-edit").fetchSemanticsNodes().isNotEmpty()
                         }

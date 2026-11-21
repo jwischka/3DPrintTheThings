@@ -195,8 +195,8 @@ class FullPresetLayoutInstrumentedTest {
     }
 
     private fun assertMainActions() {
-        control("full-presets-tab-prepare")
-        control("full-presets-tab-printer")
+        reachControl("full-presets-tab-printer")
+        reachControl("full-presets-tab-prepare")
         control("full-presets-slice")
     }
 
