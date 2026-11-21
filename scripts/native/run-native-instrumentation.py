@@ -50,7 +50,8 @@ PRESET_TESTS = ",".join(
         "distinctFilamentChildrenPreserveSlotOrder", "invalidValuesAndTopologyFailClosed",
         "fullPresetRejectsProjectInput", "wrongTypeTraversalAndCycleFailClosed",
         "geometryOnlyProjectUsesPresetsAndPreservesSource",
-        "geometryOnlyRejectsPaintAndModifierVolumes",
+        "geometryOnlyPreservesColorPaintWithSelectedSlots",
+        "geometryOnlyRejectsUnsupportedPaintAndModifierVolumes",
         "geometryOnlyCentersStlOnSelectedBedWithoutMovingSource",
     )
 )

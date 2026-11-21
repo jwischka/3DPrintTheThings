@@ -48,6 +48,10 @@
     <string name="full_presets_model_rejected">The slicing engine could not load this model.</string>
     <string name="full_presets_multiple_plates">Full Presets supports single-plate 3MF files. Choose a file with one plate.</string>
     <string name="full_presets_slice_failed">Could not slice the model.</string>
+    <string name="full_presets_slice_filament_slots">Add the required filament slots in Print setup, then slice again.</string>
+    <string name="full_presets_slice_color_paint_slots">Color painting supports filament slots 1 through 4. Assign the colors to those slots in the 3MF and reimport it.</string>
+    <string name="full_presets_slice_other_paint_unsupported">Full Presets supports color painting. Painting for supports, seams, fuzzy skin, or exterior facets is unavailable.</string>
+    <string name="full_presets_slice_paint_unsupported">This version of the slicing engine cannot slice painted 3MF files with Full Presets.</string>
     <string name="full_presets_slice_cancelled">Slice cancelled.</string>
     <string name="full_presets_output_missing">The generated G-code file is missing or empty.</string>
     <string name="full_presets_export_failed">Could not save the G-code.</string>

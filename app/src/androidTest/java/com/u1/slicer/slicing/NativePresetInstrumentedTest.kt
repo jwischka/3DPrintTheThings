@@ -359,13 +359,54 @@ class NativePresetInstrumentedTest {
             withoutLineNumbers(GcodeParser.parse(File(clean.gcodePath)).layers) == withoutLineNumbers(layers))
     }
 
-    @Test fun geometryOnlyRejectsPaintAndModifierVolumes() {
+    @Test fun geometryOnlyPreservesColorPaintWithSelectedSlots() {
+        val project = projectFixture(paint = "8", secondPartExtruder = 1)
+        val originalHash = sha256(project)
+        assertTrue("Color-painted project could not load", native.loadModel(project.absolutePath))
+        val originalBounds = native.nativeGetObjectWorldAABBMins().toList()
+        val originalConfig = native.nativeGetProjectConfig()
+        val originalPaint = requireNotNull(native.nativeGetPaintStateCounts(0, 1, 0)).toList()
+        assertEquals("Fixture must paint its second filament", listOf(2, 2), originalPaint)
+        assertEquals(1, native.nativeGetVolumeExtruder(0, 1))
+
+        assertTrue(native.loadProfile(geometryOnlyManifest(filamentCount = 1).absolutePath))
+        val unavailable = native.slice(SliceConfig()) ?: error("Missing unavailable-filament result")
+        assertFalse("Color paint was accepted without its selected filament", unavailable.success)
+        assertTrue(unavailable.errorMessage, unavailable.errorMessage.contains("Color paint references an unavailable filament"))
+
+        assertTrue(native.loadProfile(geometryOnlyManifest(filamentCount = 2).absolutePath))
+        val result = native.slice(SliceConfig(layerHeight = 0.28f)) ?: error("Missing color-painted slice result")
+        assertTrue("Geometry-only slice failed: ${result.errorMessage}", result.success)
+        val gcode = File(result.gcodePath)
+        val appliedConfig = configBlock(gcode)
+        assertEquals("0.2", appliedConfig.getString("layer_height"))
+        assertEquals("The color segmentation palette must match the two selected filaments",
+            2, appliedConfig.getString("filament_colour").split(';').size)
+        assertFalse("Project G-code survived incorporation of color paint", gcode.readText().contains("PROJECT_SENTINEL"))
+        val secondPartTools = GcodeParser.parse(gcode).layers.flatMap { it.moves }.filter { move ->
+            move.type == MoveType.EXTRUDE && move.featureType != FeatureType.PRIME_TOWER &&
+                move.x0 in 144.5f..165.5f && move.x1 in 144.5f..165.5f &&
+                move.y0 in 129.5f..140.5f && move.y1 in 129.5f..140.5f
+        }.map { it.extruder }.toSet()
+        assertEquals("The same model part must extrude both its base and painted filaments", setOf(0, 1), secondPartTools)
+        assertEquals(originalBounds, native.nativeGetObjectWorldAABBMins().toList())
+        assertEquals(originalConfig, native.nativeGetProjectConfig())
+        assertEquals(originalPaint, native.nativeGetPaintStateCounts(0, 1, 0)?.toList())
+        assertEquals(1, native.nativeGetVolumeExtruder(0, 1))
+        assertEquals(originalHash, sha256(project))
+    }
+
+    @Test fun geometryOnlyRejectsUnsupportedPaintAndModifierVolumes() {
         assertTrue(native.loadProfile(geometryOnlyManifest().absolutePath))
-        for ((subtype, paint, message) in listOf(
-            Triple("normal_part", "4", "painted volumes"),
-            Triple("negative_part", "", "modifier or negative volumes"),
+        for ((project, message) in listOf(
+            projectFixture(paint = "4", paintAttribute = "paint_supports") to "painted supports",
+            projectFixture(paint = "4", paintAttribute = "paint_seam") to "painted supports",
+            projectFixture(paint = "4", paintAttribute = "paint_fuzzy_skin") to "painted supports",
+            projectFixture(paint = "2C") to "color paint on filament slots 1 through 4",
+            projectFixture(subtype = "negative_part") to "modifier or negative volumes",
+            projectFixture(subtype = "modifier_part") to "modifier or negative volumes",
         )) {
-            assertTrue("Controlled project could not load", native.loadModel(projectFixture(subtype, paint).absolutePath))
+            assertTrue("Controlled project could not load", native.loadModel(project.absolutePath))
             val result = native.slice(SliceConfig()) ?: error("Missing slice result")
             assertFalse("Geometry-only accepted $message", result.success)
             assertTrue(result.errorMessage, result.errorMessage.contains(message))
@@ -386,12 +427,20 @@ class NativePresetInstrumentedTest {
         assertEquals(originalBounds, native.nativeGetObjectWorldAABBMins().toList())
     }
 
-    private fun geometryOnlyManifest(): File = File(bundle, "geometry-only.json").apply {
-        writeText(JSONObject(File(bundle, "diagnostic.json").readText())
-            .put("schema", "orca-native-presets-v2").put("project_settings", "geometry-only").toString())
+    private fun geometryOnlyManifest(filamentCount: Int = 4): File = File(bundle, "geometry-only-$filamentCount.json").apply {
+        val manifest = JSONObject(File(bundle, "diagnostic.json").readText())
+        val filaments = manifest.getJSONArray("filaments")
+        manifest.put("filaments", JSONArray((0 until filamentCount).map(filaments::getString)))
+        writeText(manifest.put("schema", "orca-native-presets-v2").put("project_settings", "geometry-only").toString())
     }
 
-    private fun projectFixture(subtype: String = "normal_part", paint: String = "", overrides: Boolean = true): File {
+    private fun projectFixture(
+        subtype: String = "normal_part",
+        paint: String = "",
+        overrides: Boolean = true,
+        secondPartExtruder: Int = 2,
+        paintAttribute: String = "paint_color",
+    ): File {
         val vertices = listOf("0 0 0", "10 0 0", "10 10 0", "0 10 0",
             "0 0 10", "10 0 10", "10 10 10", "0 10 10").joinToString("") { xyz ->
             val (x, y, z) = xyz.split(' ')
@@ -402,7 +451,7 @@ class NativePresetInstrumentedTest {
         fun mesh(id: Int, painted: Boolean): String {
             val faces = triangles.mapIndexed { index, face ->
                 val (a, b, c) = face.split(' ')
-                val attribute = if (painted && index == 0 && paint.isNotEmpty()) """ paint_color="$paint"""" else ""
+                val attribute = if (painted && index in 6..7 && paint.isNotEmpty()) """ $paintAttribute="$paint"""" else ""
                 """<triangle v1="$a" v2="$b" v3="$c"$attribute/>"""
             }.joinToString("")
             return """<object id="$id" type="model"><mesh><vertices>$vertices</vertices><triangles>$faces</triangles></mesh></object>"""
@@ -432,14 +481,16 @@ class NativePresetInstrumentedTest {
                 ${if (overrides) """<metadata key="sparse_infill_density" value="0%"/>""" else ""}
               </part>
               <part id="2" subtype="$subtype">
-                <metadata key="extruder" value="2"/>
+                <metadata key="extruder" value="$secondPartExtruder"/>
                 ${if (overrides) """<metadata key="wall_loops" value="4"/>""" else ""}
               </part>
             </object></config>
         """.trimIndent()
+        val palette = JSONArray().put("#123456")
+        if (paintAttribute == "paint_color" && paint.isNotEmpty()) palette.put("#FEDCBA")
         val projectSettings = JSONObject().put("layer_height", "0.31")
             .put("nozzle_temperature", JSONArray(listOf("187", "187", "187", "187")))
-            .put("filament_colour", JSONArray().put("#123456"))
+            .put("filament_colour", palette)
             .put("machine_start_gcode", "; PRINT_START\nM117 START_PROJECT_SENTINEL").toString()
         val entries = mutableMapOf(
             "[Content_Types].xml" to """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -462,7 +513,7 @@ class NativePresetInstrumentedTest {
                 <layer top_z="2" extruder="1" color="" gcode="M117 LAYER_PROJECT_SENTINEL"/>
                 </custom_gcodes_per_layer>""".trimIndent()
         }
-        return File(bundle, "controlled-$subtype-$paint-$overrides.3mf").apply {
+        return File(bundle, "controlled-$subtype-$paintAttribute-$paint-$secondPartExtruder-$overrides.3mf").apply {
             ZipOutputStream(outputStream()).use { zip ->
                 for ((path, contents) in entries) {
                     zip.putNextEntry(ZipEntry(path))

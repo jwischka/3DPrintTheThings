@@ -109,6 +109,8 @@ filament identity. User-derived presets retain their parent relationship. Filame
 order and duplicates are meaningful: they determine the configuration vector
 slots. FFF technology, nozzle dimensions, available filament indices and extruder
 topology are checked before composition can silently clamp invalid selections.
+Explicit non-FFF technology is rejected in every machine preset before looking
+up technology-specific defaults: this engine has no SLA default preset.
 
 The engine protects preset state with a mutex. A successful manifest load enables
 full-preset mode; a failed load invalidates that mode and blocks slicing. It cannot
@@ -126,8 +128,15 @@ settings, per-material, per-object, per-volume and per-layer settings, custom
 layer G-code and manual brim points. Explicit filament assignments are retained
 and must refer to a slot in the selected manifest. Imported 3MF location, scale,
 rotation and printable status are retained. Raw STL scenes are placed on the bed
-at the bounding-box center of the selected printer's printable area. Painted,
-modifier and negative volumes are rejected. Resetting to legacy mode leaves
+at the bounding-box center of the selected printer's printable area. Color-painted
+facets are retained and must reference available selected filament slots 1 through
+4; higher paint states are rejected because the pinned core can fold them onto
+physical tool indices. Painting for supports, seams, fuzzy skin and exterior facets,
+along with modifier and negative volumes, is rejected. Missing filament slots
+produce a notice directing the user to Print setup. The slicing palette has one
+entry per selected slot, using preset default colors or a valid default; the core
+uses this palette's length to determine the available painted states. Preview
+colors still come from the imported model. Resetting to legacy mode leaves
 the loaded source scene and its embedded settings available. Upstream print
 validation failures are fatal.
 

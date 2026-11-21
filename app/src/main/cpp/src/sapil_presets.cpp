@@ -1,5 +1,7 @@
 #include "sapil_presets.h"
+#include "libslic3r/Config.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <filesystem>
@@ -86,6 +88,13 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
             throw std::runtime_error("Invalid preset instantiation");
         if (entry.filament_id.empty() && entry.type == "filament" && entry.origin == "system") entry.filament_id = entry.setting_id;
         if (entry.name.empty() || (entry.type != "machine" && entry.type != "process" && entry.type != "filament")) throw std::runtime_error("Invalid preset identity");
+        // Orca's technology-based lookup indexes an SLA default absent from this engine.
+        // Reject explicit non-FFF technology before resolving any machine or ancestor.
+        if (entry.type == "machine") {
+            const auto* technology = entry.own.option<Slic3r::ConfigOptionEnumGeneric>("printer_technology");
+            if (technology && technology->value != Slic3r::ptFFF)
+                throw std::runtime_error("Only FFF printer presets are supported");
+        }
         by_path.emplace(path, entry.name);
         if (!entries.emplace(entry.name, std::move(entry)).second) throw std::runtime_error("Duplicate preset name");
     }

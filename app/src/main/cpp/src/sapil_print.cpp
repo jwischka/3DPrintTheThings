@@ -5,6 +5,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <thread>
 #include <chrono>
 #include <fstream>
@@ -12,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <nlohmann/json.hpp>
 
@@ -193,8 +195,9 @@ static void keep_filament_assignment(Slic3r::ModelConfig& config, size_t filamen
         config.set("extruder", tool);
 }
 
-static bool geometry_only_input_is_stl(const Slic3r::Model& model)
+static bool geometry_only_input_is_stl(const Slic3r::Model& model, std::size_t filament_count)
 {
+    constexpr std::size_t color_paint_slot_count = 4;
     bool only_stl = true;
     for (const auto* object : model.objects) {
         std::string path = object->input_file;
@@ -208,10 +211,17 @@ static bool geometry_only_input_is_stl(const Slic3r::Model& model)
         for (const auto* volume : object->volumes) {
             if (!volume->is_model_part())
                 throw std::runtime_error("Geometry-only presets do not support modifier or negative volumes");
-            if (volume->is_mm_painted() || volume->is_fdm_support_painted() ||
-                volume->is_seam_painted() || volume->is_fuzzy_skin_painted() ||
+            if (volume->is_fdm_support_painted() || volume->is_seam_painted() || volume->is_fuzzy_skin_painted() ||
                 !volume->exterior_facets.empty())
-                throw std::runtime_error("Geometry-only presets do not support painted volumes");
+                throw std::runtime_error("Geometry-only presets do not support painted supports, seams, fuzzy skin or exterior facets");
+            // The core can fold higher paint states onto physical U1 tools. Use
+            // only its zero-based physical tool indices with selected presets.
+            for (std::size_t tool : volume->get_extruders_from_multi_material_painting()) {
+                if (tool >= color_paint_slot_count)
+                    throw std::runtime_error("Geometry-only presets support color paint on filament slots 1 through 4");
+                if (tool >= filament_count)
+                    throw std::runtime_error("Color paint references an unavailable filament");
+            }
         }
     }
     return only_stl;
@@ -231,6 +241,29 @@ static void prepare_geometry_only_model(Slic3r::Model& model, size_t filament_co
         object->brim_points.clear();
         for (auto* volume : object->volumes)
             keep_filament_assignment(volume->config, filament_count);
+    }
+}
+
+static void prepare_geometry_only_palette(Slic3r::DynamicPrintConfig& config, std::size_t filament_count)
+{
+    auto* palette = config.option<Slic3r::ConfigOptionStrings>("filament_colour");
+    if (!palette)
+        throw std::runtime_error("Selected presets have no filament palette");
+    const auto* selected = config.option<Slic3r::ConfigOptionStrings>("default_filament_colour");
+    const auto is_rgb = [](const std::string& color) {
+        return color.size() == 7 && color.front() == '#' &&
+            std::all_of(color.begin() + 1, color.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
+    };
+    const std::string fallback = !palette->values.empty() && is_rgb(palette->values.front()) ?
+        palette->values.front() : "#F2754E";
+    // The core sizes color segmentation from the project palette, which the
+    // preset bundle can leave at its one-filament default.
+    palette->values.resize(filament_count, fallback);
+    for (std::size_t slot = 0; slot < filament_count; ++slot) {
+        if (selected && slot < selected->values.size() && is_rgb(selected->values[slot]))
+            palette->values[slot] = selected->values[slot];
+        else if (!is_rgb(palette->values[slot]))
+            palette->values[slot] = fallback;
     }
 }
 
@@ -1611,9 +1644,10 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         std::optional<Slic3r::Model> geometry_model;
         bool center_stl = false;
         if (geometry_only) {
-            center_stl = geometry_only_input_is_stl(source_model);
+            center_stl = geometry_only_input_is_stl(source_model, full_preset_filament_count);
             geometry_model.emplace(source_model);
             prepare_geometry_only_model(*geometry_model, full_preset_filament_count);
+            prepare_geometry_only_palette(dpc, full_preset_filament_count);
         }
         Slic3r::Model& model = geometry_model ? *geometry_model : source_model;
         if (full_profile && !geometry_only) {

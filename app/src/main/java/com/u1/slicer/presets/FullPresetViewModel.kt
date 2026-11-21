@@ -33,6 +33,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+private const val MAX_ERROR_LENGTH = 500
+
 internal data class FullPresetSelection(
     val printer: String,
     val process: String,
@@ -395,8 +397,8 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
             val result = native.slice(SliceConfig())
             if (cancellation.requested || result?.cancelled == true) return null
             if (result?.success != true) {
-                val detail = result?.errorMessage?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_ERROR_LENGTH)
-                throw WorkflowFailure(R.string.full_presets_slice_failed, detail)
+                val error = fullPresetSliceFailure(result?.errorMessage)
+                throw WorkflowFailure(error.message, error.detail)
             }
             if (File(result.gcodePath).canonicalFile != expectedOutput.canonicalFile ||
                 !expectedOutput.isFile || expectedOutput.length() == 0L
@@ -464,8 +466,23 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
     companion object {
         const val MAX_FILAMENTS = 16
         private const val MAX_MODEL_BYTES = 64L * 1024 * 1024
-        private const val MAX_ERROR_LENGTH = 500
     }
+}
+
+internal fun fullPresetSliceFailure(errorMessage: String?): FullPresetNotice {
+    val detail = errorMessage?.trim()?.takeIf { it.isNotEmpty() }
+    // The native engine prefixes std::exception diagnostics before passing them through JNI.
+    val message = when (detail?.removePrefix("Error: ")) {
+        "Model references an unavailable filament",
+        "Color paint references an unavailable filament" -> R.string.full_presets_slice_filament_slots
+        "Geometry-only presets support color paint on filament slots 1 through 4" ->
+            R.string.full_presets_slice_color_paint_slots
+        "Geometry-only presets do not support painted supports, seams, fuzzy skin or exterior facets" ->
+            R.string.full_presets_slice_other_paint_unsupported
+        "Geometry-only presets do not support painted volumes" -> R.string.full_presets_slice_paint_unsupported
+        else -> R.string.full_presets_slice_failed
+    }
+    return FullPresetNotice(message, detail?.take(MAX_ERROR_LENGTH))
 }
 
 internal fun fullPresetModelSourceUrl(sourceUrl: String?): String? {
