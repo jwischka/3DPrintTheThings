@@ -322,6 +322,7 @@ internal fun FullPresetScreen(
                                 downloadsEnabled = catalogEnabled,
                                 printablesState = catalog.browseState,
                                 webSearchFallback = R.string.full_presets_catalog_search_website,
+                                onDetailClosed = { catalogOrigin++ },
                             )
                         }
                         FullPresetTab.LIBRARY -> Box(Modifier.widthIn(max = 920.dp).fillMaxSize()) {

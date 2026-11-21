@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -85,6 +86,9 @@ class FullPresetCatalogInstrumentedTest {
         val holdDownload = AtomicBoolean(false)
         val downloadStarted = CountDownLatch(1)
         val releaseDownload = CountDownLatch(1)
+        val holdLateDownload = AtomicBoolean(false)
+        val lateDownloadStarted = CountDownLatch(1)
+        val releaseLateDownload = CountDownLatch(1)
         try {
             MockWebServer().use { server ->
                 server.start(InetAddress.getByName("127.0.0.1"), 0)
@@ -94,6 +98,10 @@ class FullPresetCatalogInstrumentedTest {
                         val path = request.path?.substringBefore('?').orEmpty()
                         requests.add(path)
                         if (path == "/cube.stl") {
+                            if (holdLateDownload.get()) {
+                                lateDownloadStarted.countDown()
+                                if (!releaseLateDownload.await(40, TimeUnit.SECONDS)) return MockResponse().setResponseCode(503)
+                            }
                             if (holdDownload.get()) {
                                 downloadStarted.countDown()
                                 if (!releaseDownload.await(20, TimeUnit.SECONDS)) return MockResponse().setResponseCode(503)
@@ -118,7 +126,7 @@ class FullPresetCatalogInstrumentedTest {
                     }
                 }
                 // Keep the production HTTPS-link check; only this test client's fixture host maps to loopback.
-                val http = OkHttpClient.Builder().addInterceptor { chain ->
+                val http = OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).addInterceptor { chain ->
                     val request = chain.request()
                     val target = if (request.url.host == "catalog-fixture.invalid") {
                         request.newBuilder().url(endpoint + request.url.encodedPath).build()
@@ -236,11 +244,19 @@ class FullPresetCatalogInstrumentedTest {
                         assertEquals(2, runBlocking { reopened.entries().size })
                         assertFalse(File(libraryRoot, "downloads").listFiles().orEmpty().any { it.name.startsWith(".partial-") })
 
-                        // A transfer from an older navigation context remains available without replacing Prepare.
+                        // Leaving the originating detail page keeps a late download explicit.
                         holdDownload.set(false)
-                        scenario.onActivity { catalog.downloadPrintables(requestModel, requestFile, origin = -1L) }
+                        holdLateDownload.set(true)
+                        compose.onNodeWithTag("full-presets-tab-browse").performClick()
+                        waitForText("catalog-cube.stl")
+                        compose.onNodeWithText("Download and open").performScrollTo().performClick()
+                        compose.waitUntil(20_000) { lateDownloadStarted.count == 0L }
+                        compose.onNodeWithContentDescription(context.getString(R.string.browse_back)).performClick()
+                        waitForText("Search Printables")
+                        releaseLateDownload.countDown()
                         compose.waitUntil(30_000) { catalog.state.value.transfer is FullPresetCatalogTransfer.Ready }
                         assertSame(retainedModel, model.state.value.model)
+                        compose.onNodeWithText("Search Printables").assertIsDisplayed()
                         compose.onNodeWithTag("full-presets-catalog-open").assertIsEnabled().performClick()
                         compose.waitUntil(60_000) {
                             model.state.value.operation == null && model.state.value.model !== retainedModel
@@ -253,6 +269,7 @@ class FullPresetCatalogInstrumentedTest {
                         throw failure
                     } finally {
                         releaseDownload.countDown()
+                        releaseLateDownload.countDown()
                     }
                 }
             }

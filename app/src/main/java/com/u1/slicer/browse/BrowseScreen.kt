@@ -67,6 +67,7 @@ fun BrowseScreen(
     downloadsEnabled: Boolean = true,
     printablesState: BrowsePrintablesState = remember { BrowsePrintablesState() },
     @StringRes webSearchFallback: Int? = null,
+    onDetailClosed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -99,6 +100,7 @@ fun BrowseScreen(
         if (printablesState.detail != null && !busy) {
             printablesState.detail = null
             printablesState.failed = false
+            onDetailClosed()
         } else onBack()
     }
     BackHandler { back() }
