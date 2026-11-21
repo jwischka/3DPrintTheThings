@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="browse_model_attribution">By %1$s · %2$s</string>
+    <string name="browse_thumbnail_loading">Loading model image</string>
+    <string name="browse_thumbnail_unavailable">Model image unavailable</string>
+</resources>

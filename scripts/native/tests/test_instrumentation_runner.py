@@ -22,6 +22,17 @@ class InstrumentationResultTest(unittest.TestCase):
     def test_missing_selected_test(self):
         self.assertFalse(runner.passed(result(1), 0, 2))
 
+    def test_selected_class_must_complete(self):
+        start, complete = result(1).split("INSTRUMENTATION_STATUS_CODE: 0", 1)
+        first_class = "INSTRUMENTATION_STATUS: class=ExampleLayoutTest\n"
+        other_class = "INSTRUMENTATION_STATUS: class=OtherTest\n"
+        complete = "INSTRUMENTATION_STATUS_CODE: 0" + complete
+        expected_classes = ("ExampleLayoutTest",)
+        self.assertTrue(runner.passed(first_class + start + first_class + complete, 0,
+                                      expected_classes=expected_classes))
+        self.assertFalse(runner.passed(first_class + start + other_class + complete, 0,
+                                       expected_classes=expected_classes))
+
     def test_summary_cannot_hide_missing_completion(self):
         self.assertFalse(runner.passed(result().replace(
             "INSTRUMENTATION_STATUS_CODE: 0\n", "", 1), 0))

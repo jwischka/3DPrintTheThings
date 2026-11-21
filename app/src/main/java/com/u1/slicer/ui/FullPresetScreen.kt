@@ -6,7 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -14,13 +16,20 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -33,12 +42,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,15 +58,21 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.u1.slicer.R
@@ -360,54 +369,115 @@ internal fun FullPresetScreen(
 
 @Composable
 private fun FullPresetBottomNavigation(selected: FullPresetTab, onSelect: (FullPresetTab) -> Unit) {
-    val height = 64.dp * LocalDensity.current.fontScale.coerceIn(1f, 2f)
-    val colors = NavigationBarItemDefaults.colors(
-        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        selectedTextColor = MaterialTheme.colorScheme.primary,
-        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-    )
-    NavigationBar(
-        modifier = Modifier.height(height),
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp,
-        windowInsets = WindowInsets(0, 0, 0, 0),
-    ) {
-        FullPresetTab.entries.forEach { tab ->
-            NavigationBarItem(
-                selected = tab == selected,
-                onClick = { onSelect(tab) },
-                icon = { Icon(tab.icon, contentDescription = null) },
-                label = { Text(stringResource(tab.label), maxLines = 2) },
-                colors = colors,
-                modifier = Modifier.testTag(tab.tag),
-            )
+    val labels = FullPresetTab.entries.associateWith { stringResource(it.label) }
+    val widest = widestNavigationLabel(labels.values)
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
+        val useTwoRows = widest + 4.dp > maxWidth / labels.size
+        val columns = if (useTwoRows) 2 else labels.size
+        Column(Modifier.selectableGroup()) {
+            labels.keys.chunked(columns).forEach { row ->
+                Row(Modifier.fillMaxWidth()) {
+                    row.forEach { tab ->
+                        FullPresetNavigationItem(
+                            tab = tab,
+                            label = labels.getValue(tab),
+                            selected = tab == selected,
+                            onClick = { onSelect(tab) },
+                            modifier = Modifier.weight(1f).heightIn(min = if (useTwoRows) 48.dp else 64.dp),
+                            horizontal = useTwoRows,
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
 private fun FullPresetNavigationRail(selected: FullPresetTab, onSelect: (FullPresetTab) -> Unit) {
-    val colors = NavigationRailItemDefaults.colors(
-        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        selectedTextColor = MaterialTheme.colorScheme.primary,
-        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-    )
+    val labels = FullPresetTab.entries.associateWith { stringResource(it.label) }
+    val width = (widestNavigationLabel(labels.values) + 12.dp).coerceIn(72.dp, 120.dp)
     Box(Modifier.fillMaxHeight().background(MaterialTheme.colorScheme.surface)) {
-        NavigationRail(
-            modifier = Modifier.verticalScroll(rememberScrollState()),
-            containerColor = MaterialTheme.colorScheme.surface,
-            windowInsets = WindowInsets(0, 0, 0, 0),
-        ) {
-            FullPresetTab.entries.forEach { tab ->
-                NavigationRailItem(
+        Column(Modifier.width(width).verticalScroll(rememberScrollState()).selectableGroup()) {
+            labels.forEach { (tab, label) ->
+                FullPresetNavigationItem(
+                    tab = tab,
+                    label = label,
                     selected = tab == selected,
                     onClick = { onSelect(tab) },
-                    icon = { Icon(tab.icon, contentDescription = null) },
-                    label = { Text(stringResource(tab.label), maxLines = 2) },
-                    colors = colors,
-                    modifier = Modifier.testTag(tab.tag),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    compact = true,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun widestNavigationLabel(labels: Collection<String>): Dp {
+    val measurer = rememberTextMeasurer()
+    val style = MaterialTheme.typography.labelMedium
+    val width = labels.maxOf {
+        measurer.measure(AnnotatedString(it), style = style, softWrap = false, maxLines = 1).size.width
+    }
+    return with(LocalDensity.current) { width.toDp() }
+}
+
+@Composable
+private fun FullPresetNavigationItem(
+    tab: FullPresetTab,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier,
+    horizontal: Boolean = false,
+    compact: Boolean = false,
+) {
+    val colors = MaterialTheme.colorScheme
+    val itemModifier = modifier.testTag(tab.tag)
+        .selectable(selected = selected, onClick = onClick, role = Role.Tab)
+        .padding(horizontal = 2.dp)
+    val icon: @Composable () -> Unit = {
+        Box(
+            modifier = Modifier.width(if (horizontal) 32.dp else 56.dp)
+                .height(if (compact) 25.dp else 32.dp)
+                .background(if (selected) colors.primaryContainer else Color.Transparent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                tab.icon,
+                contentDescription = null,
+                modifier = Modifier.size(if (compact) 21.dp else 24.dp),
+                tint = if (selected) colors.onPrimaryContainer else colors.onSurfaceVariant,
+            )
+        }
+    }
+    val text: @Composable () -> Unit = {
+        Text(
+            label,
+            modifier = Modifier.testTag("${tab.tag}-label"),
+            color = if (selected) colors.primary else colors.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+            textAlign = TextAlign.Center,
+        )
+    }
+    if (horizontal) {
+        Row(
+            itemModifier,
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            icon()
+            text()
+        }
+    } else {
+        Column(
+            itemModifier,
+            verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            icon()
+            text()
         }
     }
 }

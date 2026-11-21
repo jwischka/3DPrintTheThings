@@ -136,6 +136,7 @@ class FullPresetLayoutInstrumentedTest {
                     scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
                     waitForConfiguration(scenario, Configuration.ORIENTATION_PORTRAIT, 1.5f)
                     assertMainActions()
+                    assertPortraitNavigationLabels()
                     waitForHeadingLineHeight(1.5f, baselineLineHeight)
                     captureRenderedPreview(stage, baselineGlyphHeight)
                     checkSettings()
@@ -198,6 +199,17 @@ class FullPresetLayoutInstrumentedTest {
         reachControl("full-presets-tab-printer")
         reachControl("full-presets-tab-prepare")
         control("full-presets-slice")
+    }
+
+    private fun assertPortraitNavigationLabels() {
+        for (destination in listOf("prepare", "browse", "library", "printer")) {
+            val label = compose.onNodeWithTag("full-presets-tab-$destination-label", useUnmergedTree = true)
+                .assertIsDisplayed()
+            val layout = requireNotNull(label.textLayout()) { "Missing navigation label for $destination" }
+            assertEquals("Wrapped navigation label for $destination", 1, layout.lineCount)
+            assertFalse("Clipped navigation label for $destination", layout.hasVisualOverflow)
+            assertEquals(1.5f, layout.layoutInput.density.fontScale, 0.01f)
+        }
     }
 
     private fun prepareHeading() = InstrumentationRegistry.getInstrumentation().targetContext
