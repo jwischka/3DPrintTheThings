@@ -206,8 +206,11 @@ class FullPresetLayoutInstrumentedTest {
             val label = compose.onNodeWithTag("full-presets-tab-$destination-label", useUnmergedTree = true)
                 .assertIsDisplayed()
             val layout = requireNotNull(label.textLayout()) { "Missing navigation label for $destination" }
-            assertEquals("Wrapped navigation label for $destination", 1, layout.lineCount)
-            assertFalse("Clipped navigation label for $destination", layout.hasVisualOverflow)
+            val layoutDetails = "size=${layout.size}, paragraph=${layout.multiParagraph.width}×${layout.multiParagraph.height}, " +
+                "constraints=${layout.layoutInput.constraints}, fontScale=${layout.layoutInput.density.fontScale}, " +
+                "horizontalOverflow=${layout.didOverflowWidth}, verticalOverflow=${layout.didOverflowHeight}"
+            assertEquals("Wrapped navigation label for $destination ($layoutDetails)", 1, layout.lineCount)
+            assertFalse("Clipped navigation label for $destination ($layoutDetails)", layout.hasVisualOverflow)
             assertEquals(1.5f, layout.layoutInput.density.fontScale, 0.01f)
         }
     }

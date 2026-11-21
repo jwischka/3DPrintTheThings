@@ -196,7 +196,12 @@ fun BrowseScreen(
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it },
-                        label = { Text(stringResource(R.string.browse_search_label)) },
+                        label = {
+                            Text(
+                                if (selectedSite.id == "printables") stringResource(R.string.browse_search_label)
+                                else stringResource(R.string.browse_search_site_label, selectedSite.name),
+                            )
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !busy,

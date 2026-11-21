@@ -453,8 +453,9 @@ private fun FullPresetNavigationItem(
         }
     }
     val text: @Composable () -> Unit = {
+        // Match the paragraph layout used to measure the available navigation labels.
         Text(
-            label,
+            AnnotatedString(label),
             modifier = Modifier.testTag("${tab.tag}-label"),
             color = if (selected) colors.primary else colors.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
