@@ -5,7 +5,7 @@
     <string name="full_presets_mapping_applied">Printer filament mapping applied. The slots will be checked again before slicing.</string>
     <string name="full_presets_mapping_manual">Use manual filament slots</string>
     <string name="full_presets_mapping_model_unavailable">Printer mapping requires a model with known filament assignments in slots 1 through 4.</string>
-    <string name="full_presets_mapping_explanation">Choose a loaded printer slot for each model filament. Select a slicer preset for each physical slot.</string>
+    <string name="full_presets_mapping_explanation">The preview shows the model’s original colors. Choose a loaded printer slot for each model filament and a slicer preset for each physical slot.</string>
     <string name="full_presets_mapping_check">Check loaded filaments on the configured printer.</string>
     <string name="full_presets_mapping_loading">Checking loaded filaments…</string>
     <string name="full_presets_mapping_no_connection">Set a printer address in the Printer tab, then refresh.</string>
