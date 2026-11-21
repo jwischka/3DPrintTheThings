@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.ParcelFileDescriptor
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOn
@@ -60,7 +61,6 @@ class FullPresetPrinterLayoutInstrumentedTest {
         val settings = ExperimentalPrinterConnection(context)
 
         try {
-            shell(automation, "settings --user current put system font_scale 1.5")
             shell(automation, "settings --user current put secure show_ime_with_hard_keyboard 1")
             service.flags = serviceFlags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             automation.serviceInfo = service
@@ -85,17 +85,9 @@ class FullPresetPrinterLayoutInstrumentedTest {
                             previousOrientation = it.requestedOrientation
                             it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                         }
-                        compose.waitUntil(20_000) {
-                            var configured = false
-                            if (scenario.state == Lifecycle.State.RESUMED) {
-                                scenario.onActivity {
-                                    val config = it.resources.configuration
-                                    configured = config.orientation == Configuration.ORIENTATION_LANDSCAPE &&
-                                        abs(config.fontScale - 1.5f) < 0.01f
-                                }
-                            }
-                            configured
-                        }
+                        waitForLandscape(scenario, automation)
+                        shell(automation, "settings --user current put system font_scale 1.5")
+                        waitForLandscape(scenario, automation, fontScale = 1.5f)
                         compose.onNodeWithTag("full-presets-tab-printer").assertIsDisplayed().performClick()
                         compose.waitUntil(20_000) {
                             compose.onAllNodesWithTag("experimental-printer-edit").fetchSemanticsNodes().isNotEmpty()
@@ -146,6 +138,35 @@ class FullPresetPrinterLayoutInstrumentedTest {
                     }
                 }
             }
+        }
+    }
+
+    private fun waitForLandscape(
+        scenario: ActivityScenario<FullPresetActivity>,
+        automation: UiAutomation,
+        fontScale: Float? = null,
+    ) {
+        var observed = "no resumed Activity configuration observed"
+        try {
+            compose.waitUntil(20_000) {
+                var configured = false
+                if (scenario.state == Lifecycle.State.RESUMED) {
+                    scenario.onActivity {
+                        val config = it.resources.configuration
+                        observed = "orientation=${config.orientation}, fontScale=${config.fontScale}"
+                        configured = config.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                            (fontScale == null || abs(config.fontScale - fontScale) < 0.01f)
+                    }
+                }
+                configured
+            }
+        } catch (failure: ComposeTimeoutException) {
+            val storedScale = shell(automation, "settings --user current get system font_scale").trim()
+            val expected = fontScale?.let { "landscape with font scale $it" } ?: "landscape"
+            throw AssertionError(
+                "Expected $expected. Last observed $observed. Lifecycle=${scenario.state}, stored font scale=$storedScale.",
+                failure,
+            )
         }
     }
 
