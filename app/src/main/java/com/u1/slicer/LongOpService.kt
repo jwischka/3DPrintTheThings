@@ -77,7 +77,8 @@ class LongOpService : Service() {
     }
 
     private fun buildNotification(stage: String, progress: Int): Notification {
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
+        val activity = if (BuildConfig.FULL_PRESET_EXPERIMENTAL) FullPresetActivity::class.java else MainActivity::class.java
+        val launchIntent = Intent(this, activity).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
@@ -88,7 +89,7 @@ class LongOpService : Service() {
         val text = if (progress > 0) "$stage... ($progress%)" else "$stage..."
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Your One Slicer")
+            .setContentTitle(if (BuildConfig.FULL_PRESET_EXPERIMENTAL) getString(R.string.app_name) else "Your One Slicer")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setProgress(100, progress.coerceIn(0, 100), progress == 0)

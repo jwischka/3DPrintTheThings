@@ -120,6 +120,7 @@ class FullPresetWorkflowInstrumentedTest {
             val selectedId = requireNotNull(model.state.value.bundleId)
             assertEquals(1, FullPresetStore(File(context.noBackupFilesDir, "full-presets")).get(selectedId)?.filaments?.size)
             openSettings()
+            compose.onNodeWithTag("full-presets-printer-and-quality").performScrollTo().performClick()
             compose.onNodeWithTag("full-presets-bundle").performScrollTo().performClick()
             compose.onNodeWithTag("full-presets-bundle-option-$firstBundle").performClick()
             assertNull("Changing presets retained a stale result", model.state.value.output)

@@ -12,6 +12,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.BufferedSink
 import okio.ForwardingSink
+import okio.HashingSink
 import okio.buffer
 import org.json.JSONObject
 import java.io.File
@@ -158,6 +159,8 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
     }
 
     companion object {
+        private val preparedFilename = Regex("[A-Za-z0-9_-]{1,110}\\.gcode")
+
         private fun defaultClient() = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -195,6 +198,27 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
 
     /** Null when Klippy is ready and no print is active; a reason otherwise. */
     suspend fun validateStartJob(): String? = MoonrakerPreflight(client).check(baseUrl)
+
+    internal suspend fun validateU1StartJob(): String? {
+        val (http, endpoint) = synchronized(authLock) { client to baseUrl }
+        return MoonrakerPreflight(http).check(endpoint, requireU1Idle = true)
+    }
+
+    internal suspend fun startPreparedU1Print(filename: String, maySend: () -> Boolean): U1PrintStartResult {
+        if (!preparedFilename.matches(filename)) return U1PrintStartResult.NotSent
+        val (http, scope, endpoint) = synchronized(authLock) { Triple(client, apiKeyScope, baseUrl) }
+        val websocketUrl = endpoint.toHttpUrlOrNull()?.newBuilder()?.addPathSegment("websocket")?.build()
+            ?: return U1PrintStartResult.NotSent
+        val request = Request.Builder().url(websocketUrl).apply {
+            scope?.takeIf { it.includes(websocketUrl) }?.let { header("X-Api-Key", it.key) }
+        }.build()
+        val websocketClient = http.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+        return startU1LocalFile(websocketClient, request, filename, maySend)
+    }
 
     /** Fetch a camera snapshot with the same scoped auth policy as Moonraker HTTP calls. */
     suspend fun fetchSnapshot(snapshotUrl: String): ByteArray? {
@@ -518,17 +542,40 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
         file: File,
         filename: String,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): MoonrakerUploadResult = uploadGcode(file, filename, onProgress, expected = null)
+
+    internal suspend fun uploadPreparedGcode(
+        file: File,
+        filename: String,
+        sizeBytes: Long,
+        sha256: String,
+        onProgress: (Long, Long) -> Unit,
     ): MoonrakerUploadResult {
-        if (!file.isFile || file.length() == 0L) return MoonrakerUploadResult.Failure("G-code file is empty or missing")
+        if (!preparedFilename.matches(filename)) return MoonrakerUploadResult.Failure("Invalid G-code filename")
+        return uploadGcode(file, filename, onProgress, PreparedGcode(sizeBytes, sha256))
+    }
+
+    private data class PreparedGcode(val sizeBytes: Long, val sha256: String)
+
+    private suspend fun uploadGcode(
+        file: File,
+        filename: String,
+        onProgress: (Long, Long) -> Unit,
+        expected: PreparedGcode?,
+    ): MoonrakerUploadResult {
+        val total = file.length()
+        if (!file.isFile || total == 0L || (expected != null && total != expected.sizeBytes)) {
+            return MoonrakerUploadResult.Failure("G-code file is empty, missing or changed")
+        }
         val (uploadClientBase, uploadKey, uploadBaseUrl) = synchronized(authLock) {
             Triple(client, apiKeyScope?.key, baseUrl)
         }
-        val total = file.length()
         val fileSizeMb = total / (1024 * 1024)
         val timeout = maxOf(30L, minOf(300L, fileSizeMb))
         val uploadClient = uploadClientBase.newBuilder()
             .writeTimeout(timeout, TimeUnit.SECONDS)
             .readTimeout(timeout, TimeUnit.SECONDS)
+            .apply { if (expected != null) callTimeout(timeout, TimeUnit.SECONDS) }
             .retryOnConnectionFailure(false)
             .followRedirects(false)
             .followSslRedirects(false)
@@ -541,8 +588,12 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
             override fun isOneShot() = true
             override fun writeTo(sink: BufferedSink) {
                 var sent = 0L
-                val countingSink = object : ForwardingSink(sink) {
+                val hashingSink = expected?.let { HashingSink.sha256(sink) }
+                val countingSink = object : ForwardingSink(hashingSink ?: sink) {
                     override fun write(source: okio.Buffer, byteCount: Long) {
+                        if (expected != null && byteCount > total - sent) {
+                            throw IOException("G-code file changed during upload")
+                        }
                         super.write(source, byteCount)
                         sent += byteCount
                         runCatching { onProgress(sent.coerceAtMost(total), total) }
@@ -550,12 +601,20 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
                 }.buffer()
                 sourceBody.writeTo(countingSink)
                 countingSink.flush()
+                if (expected != null && (sent != total || hashingSink?.hash?.hex() != expected.sha256)) {
+                    throw IOException("G-code file changed during upload")
+                }
             }
         }
         val request = try {
+            val parts = MultipartBody.Builder().setType(MultipartBody.FORM)
+            if (expected != null) {
+                parts.addFormDataPart("root", "gcodes")
+                    .addFormDataPart("print", "false")
+                    .addFormDataPart("checksum", expected.sha256)
+            }
             Request.Builder().url("$uploadBaseUrl/server/files/upload")
-                .post(MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("file", filename, countingBody).build())
+                .post(parts.addFormDataPart("file", filename, countingBody).build())
                 .build()
         } catch (_: IllegalArgumentException) {
             return MoonrakerUploadResult.Failure("Invalid printer URL")
@@ -589,8 +648,17 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
                                 ?.let { raw -> if (uploadKey != null) raw.replace(uploadKey, "[redacted]") else raw }
                                 ?.replace(Regex("[\\p{Cntrl}]+"), " ")
                                 ?.take(300)?.takeIf { it.isNotBlank() }
-                            val confirmed = !oversized && parsed?.optJSONObject("result")?.let { result ->
-                                result.optJSONObject("item") != null || (result.has("path") && result.has("root"))
+                            val receipt = parsed?.optJSONObject("result") ?: parsed?.takeIf { expected != null }
+                            val confirmed = !oversized && receipt?.let { result ->
+                                val item = result.optJSONObject("item")
+                                if (expected == null) {
+                                    item != null || (result.has("path") && result.has("root"))
+                                } else {
+                                    val size = item?.opt("size")
+                                    item != null && item.opt("path") == filename && item.opt("root") == "gcodes" &&
+                                        (size is Int || size is Long) && (size as Number).toLong() == expected.sizeBytes &&
+                                        result.opt("print_started") == false && result.opt("print_queued") == false
+                                }
                             } == true
                             if (response.isSuccessful && confirmed && message == null) MoonrakerUploadResult.Success
                             else if (response.isSuccessful) MoonrakerUploadResult.Failure("Could not confirm upload from printer")

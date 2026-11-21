@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_presets_review_and_print">Review and print</string>
+    <string name="full_presets_print_review_title">Review print</string>
+    <string name="full_presets_print_review_setup">Open Print setup</string>
+    <string name="full_presets_print_review_confirm">Print</string>
+    <string name="full_presets_print_review_refresh">Check printer again</string>
+    <string name="full_presets_print_review_printer">Printer · %1$s</string>
+    <string name="full_presets_print_review_reported_at">Filaments checked at %1$s.</string>
+    <string name="full_presets_print_review_tools">Tools required by this G-code</string>
+    <string name="full_presets_print_review_estimated_usage">Estimated filament · %1$s</string>
+    <string name="full_presets_print_review_unknown_usage">Filament estimate unavailable.</string>
+    <string name="full_presets_print_review_unknown_preset">Slicer preset unavailable.</string>
+    <string name="full_presets_print_review_check_preset">Check that each slicer preset suits the material reported by the printer.</string>
+    <string name="full_presets_print_review_checking">Checking the printer and G-code…</string>
+    <string name="full_presets_print_review_ready">The required slots were loaded at the last check. The app checks again before printing.</string>
+    <string name="full_presets_print_review_starting">Asking the printer to start…</string>
+    <string name="full_presets_print_review_started">The printer accepted the start request.</string>
+    <string name="full_presets_print_review_uncertain">The printer did not confirm the start. Check its screen before trying another print.</string>
+    <string name="full_presets_print_sending">Uploading G-code…</string>
+    <string name="full_presets_print_failed">Could not send this print to the printer.</string>
+    <string name="full_presets_print_requires_mapping">Map the model colors to loaded printer slots in Print setup, then slice again.</string>
+    <string name="full_presets_print_invalid_job">Could not verify which tools this G-code uses. Slice the model again.</string>
+    <string name="full_presets_print_output_changed">The sliced file has changed. Slice the model again.</string>
+    <string name="full_presets_print_connection_changed">The saved printer connection changed. Check the mapping in Print setup and slice again.</string>
+    <string name="full_presets_print_printer_not_ready">The printer is busy or did not report that it is ready.</string>
+    <string name="full_presets_print_filament_report_unavailable">Could not read the loaded filaments from the printer.</string>
+    <string name="full_presets_print_filaments_changed">The printer reports different filaments. Check the mapping in Print setup and slice again.</string>
+    <string name="full_presets_print_material_mismatch">Could not confirm that the selected material types match the loaded filaments. Check the presets and slice again.</string>
+    <string name="full_presets_print_upload_unconfirmed">The printer did not confirm the upload. The app did not send a start request.</string>
+    <string name="full_presets_print_start_rejected">The printer rejected the start request.</string>
+    <string name="full_presets_print_busy">Another print request is in progress.</string>
+</resources>

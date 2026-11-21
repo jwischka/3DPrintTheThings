@@ -3,16 +3,21 @@ package com.u1.slicer.ui
 import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -28,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.R
 import com.u1.slicer.network.U1FilamentSlot
@@ -44,17 +51,19 @@ internal fun FullPresetPrinterFilamentFields(
     state: FullPresetUiState,
     viewModel: FullPresetViewModel,
     filamentPresets: List<Pair<String, String>>,
+    expanded: Boolean,
+    onExpandedChanged: (Boolean) -> Unit,
 ) {
     val model = state.model ?: return
     val modelFilaments = model.filaments
     val applied = state.filamentMapping
     val enabled = state.operation == null
-    var expanded by rememberSaveable(model.file.path) { mutableStateOf(applied != null) }
     OutlinedButton(
         enabled = enabled,
         onClick = {
-            expanded = !expanded
-            if (expanded && modelFilaments?.canMap == true) viewModel.refreshPrinterFilaments()
+            val opening = !expanded
+            onExpandedChanged(opening)
+            if (opening && modelFilaments?.canMap == true) viewModel.refreshPrinterFilaments()
         },
         modifier = Modifier.testTag("full-presets-printer-filaments"),
     ) {
@@ -62,7 +71,13 @@ internal fun FullPresetPrinterFilamentFields(
     }
     if (applied != null) {
         Text(stringResource(R.string.full_presets_mapping_applied), color = MaterialTheme.colorScheme.primary)
-        TextButton(onClick = viewModel::useManualFilaments, enabled = enabled) {
+        TextButton(
+            onClick = {
+                viewModel.useManualFilaments()
+                onExpandedChanged(false)
+            },
+            enabled = enabled,
+        ) {
             Text(stringResource(R.string.full_presets_mapping_manual))
         }
     }
@@ -88,9 +103,17 @@ private fun PrinterFilamentMappingForm(
     var targets by remember(modelFile, state.bundleId, state.selection?.printer, applied) {
         mutableStateOf(applied?.targets.orEmpty())
     }
-    var presets by remember(modelFile, state.bundleId, state.selection?.printer, applied) {
-        mutableStateOf(applied?.physicalPresets.orEmpty().mapIndexed { index, path -> (index + 1) to path }.toMap())
+    val currentPresets = state.selection?.filaments.orEmpty()
+    val names = remember(filamentPresets) { filamentPresets.toMap() }
+    var presets by remember(modelFile, state.bundleId, state.selection?.printer, applied, currentPresets, names) {
+        val selected = applied?.physicalPresets ?: currentPresets
+        mutableStateOf(fullPresetPhysicalSlots.mapNotNull { slot ->
+            (selected.getOrNull(slot - 1) ?: selected.firstOrNull())
+                ?.takeIf { it in names }
+                ?.let { slot to it }
+        }.toMap())
     }
+    var presetsExpanded by rememberSaveable(modelFile.path, state.bundleId) { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.full_presets_mapping_explanation), style = MaterialTheme.typography.bodyMedium)
@@ -114,47 +137,51 @@ private fun PrinterFilamentMappingForm(
         }
         Text(stringResource(status))
         if (ready != null) {
-            val loadedSlots = ready.snapshot.slots.filter { it.present == true }.sortedBy { it.physicalSlot }
-            val choices = loadedSlots.map { slot ->
-                val unknown = stringResource(R.string.full_presets_mapping_unknown)
-                slot.physicalSlot.toString() to stringResource(
-                    R.string.full_presets_mapping_physical_choice,
-                    slot.physicalSlot,
-                    slot.material ?: unknown,
-                    slot.subtype ?: unknown,
-                    slot.color ?: unknown,
-                )
-            }
-
+            val slots = ready.snapshot.slots.associateBy(U1FilamentSlot::physicalSlot)
+            val loaded = fullPresetPhysicalSlots.mapNotNull(slots::get).filter { it.present == true }
+            if (loaded.isEmpty()) Text(stringResource(R.string.full_presets_mapping_no_loaded_slots))
             for (slot in modelFilaments.usedSlots.sorted()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    val color = modelFilaments.color(slot)
-                    FilamentSwatch(color)
-                    Text(stringResource(R.string.full_presets_mapping_source_slot, slot, color ?: stringResource(R.string.full_presets_mapping_unknown)))
-                }
-                PresetPicker(
-                    tag = "full-presets-map-source-$slot",
-                    label = stringResource(R.string.full_presets_mapping_destination),
-                    selected = targets[slot]?.toString(),
-                    entries = choices,
-                    enabled = enabled && choices.isNotEmpty(),
-                    onSelect = { target -> targets = targets + (slot to target.toInt()) },
+                ModelColorMappingCard(
+                    sourceSlot = slot,
+                    sourceColor = modelFilaments.color(slot),
+                    selectedSlot = targets[slot],
+                    reported = slots,
+                    loaded = loaded,
+                    selectedPreset = targets[slot]?.let(presets::get)?.let(names::get),
+                    enabled = enabled,
+                    onSelect = { target -> targets = targets + (slot to target) },
                 )
             }
 
-            HorizontalDivider()
-            Text(stringResource(R.string.full_presets_mapping_choose_presets), style = MaterialTheme.typography.titleSmall)
-            for (slot in fullPresetPhysicalSlots) {
-                val filament = ready.snapshot.slots.firstOrNull { it.physicalSlot == slot }
-                PrinterFilamentReport(slot, filament)
-                PresetPicker(
-                    tag = "full-presets-map-preset-$slot",
-                    label = stringResource(R.string.full_presets_mapping_physical_preset, slot),
-                    selected = presets[slot],
-                    entries = filamentPresets,
-                    enabled = enabled,
-                    onSelect = { preset -> presets = presets + (slot to preset) },
-                )
+            val needsPresets = presets.size < fullPresetPhysicalSlots.count()
+            Text(
+                stringResource(
+                    if (needsPresets) R.string.full_presets_mapping_presets_needed
+                    else R.string.full_presets_mapping_presets_current,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(
+                onClick = { presetsExpanded = !presetsExpanded },
+                modifier = Modifier.testTag("full-presets-physical-presets"),
+            ) {
+                Text(stringResource(
+                    if (presetsExpanded) R.string.full_presets_mapping_hide_presets
+                    else R.string.full_presets_mapping_choose_presets,
+                ))
+            }
+            if (presetsExpanded) {
+                for (slot in fullPresetPhysicalSlots) {
+                    PrinterFilamentReport(slot, slots[slot])
+                    PresetPicker(
+                        tag = "full-presets-map-preset-$slot",
+                        label = stringResource(R.string.full_presets_mapping_physical_preset, slot),
+                        selected = presets[slot],
+                        entries = filamentPresets,
+                        enabled = enabled,
+                        onSelect = { preset -> presets = presets + (slot to preset) },
+                    )
+                }
             }
             if (!fresh) Text(stringResource(status))
         }
@@ -174,8 +201,63 @@ private fun PrinterFilamentMappingForm(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PrinterFilamentReport(physicalSlot: Int, filament: U1FilamentSlot?) {
+private fun ModelColorMappingCard(
+    sourceSlot: Int,
+    sourceColor: String?,
+    selectedSlot: Int?,
+    reported: Map<Int, U1FilamentSlot>,
+    loaded: List<U1FilamentSlot>,
+    selectedPreset: String?,
+    enabled: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("full-presets-map-source-$sourceSlot"),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilamentSwatch(sourceColor)
+                Text(
+                    stringResource(R.string.full_presets_mapping_source_color, sourceSlot),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+            if (loaded.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (slot in loaded) {
+                        val physical = slot.physicalSlot
+                        FilterChip(
+                            selected = selectedSlot == physical,
+                            onClick = { onSelect(physical) },
+                            enabled = enabled,
+                            leadingIcon = { FilamentSwatch(slot.color) },
+                            label = { Text(stringResource(R.string.full_presets_mapping_slot_short, physical)) },
+                            modifier = Modifier.testTag("full-presets-map-source-$sourceSlot-option-$physical"),
+                        )
+                    }
+                }
+            }
+            if (selectedSlot != null) {
+                PrinterFilamentReport(selectedSlot, reported[selectedSlot])
+                if (selectedPreset != null) {
+                    Text(
+                        stringResource(R.string.full_presets_mapping_selected_preset, selectedPreset),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            } else {
+                Text(stringResource(R.string.full_presets_mapping_destination), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PrinterFilamentReport(physicalSlot: Int, filament: U1FilamentSlot?) {
     val unknown = stringResource(R.string.full_presets_mapping_unknown)
     val presence = stringResource(when (filament?.present) {
         true -> R.string.full_presets_mapping_loaded
@@ -191,14 +273,18 @@ private fun PrinterFilamentReport(physicalSlot: Int, filament: U1FilamentSlot?) 
             filament?.vendor ?: unknown,
             filament?.material ?: unknown,
             filament?.subtype ?: unknown,
-            filament?.color ?: unknown,
         ))
     }
 }
 
 @Composable
-private fun FilamentSwatch(hex: String?) {
+internal fun FilamentSwatch(hex: String?) {
     val color = hex?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
         ?: MaterialTheme.colorScheme.surfaceVariant
-    Box(Modifier.size(18.dp).background(color, CircleShape).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape))
+    val description = stringResource(R.string.full_presets_mapping_color_description, hex ?: stringResource(R.string.full_presets_mapping_unknown))
+    Box(
+        Modifier.size(18.dp).background(color, CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            .semantics { contentDescription = description },
+    )
 }

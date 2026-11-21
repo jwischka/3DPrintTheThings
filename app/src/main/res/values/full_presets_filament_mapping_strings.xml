@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="full_presets_mapping_show">Map printer filaments</string>
+    <string name="full_presets_quality_show">Printer and quality</string>
+    <string name="full_presets_quality_hide">Hide printer and quality</string>
     <string name="full_presets_mapping_hide">Hide filament mapping</string>
     <string name="full_presets_mapping_applied">Printer filament mapping applied. The slots will be checked again before slicing.</string>
     <string name="full_presets_mapping_manual">Use manual filament slots</string>
     <string name="full_presets_mapping_model_unavailable">Printer mapping requires a model with known filament assignments in slots 1 through 4.</string>
-    <string name="full_presets_mapping_explanation">The preview shows the model’s original colors. Choose a loaded printer slot for each model filament and a slicer preset for each physical slot.</string>
+    <string name="full_presets_mapping_explanation">The preview shows the original colors. Tap a loaded printer slot for each model color.</string>
     <string name="full_presets_mapping_check">Check loaded filaments on the configured printer.</string>
     <string name="full_presets_mapping_loading">Checking loaded filaments…</string>
     <string name="full_presets_mapping_no_connection">Set a printer address in the Printer tab, then refresh.</string>
@@ -14,15 +16,21 @@
     <string name="full_presets_mapping_fresh">Filaments reported by the printer.</string>
     <string name="full_presets_mapping_stale">The filament report has expired. Refresh it to apply the mapping.</string>
     <string name="full_presets_mapping_refresh">Refresh printer filaments</string>
-    <string name="full_presets_mapping_source_slot">Model filament %1$d · %2$s</string>
-    <string name="full_presets_mapping_destination">Printer slot</string>
-    <string name="full_presets_mapping_physical_choice">E%1$d · %2$s · %3$s · %4$s</string>
+    <string name="full_presets_mapping_source_color">Model color %1$d</string>
+    <string name="full_presets_mapping_destination">Choose a printer slot</string>
+    <string name="full_presets_mapping_slot_short">E%1$d</string>
+    <string name="full_presets_mapping_color_description">Color %1$s</string>
+    <string name="full_presets_mapping_selected_preset">Slicer preset · %1$s</string>
+    <string name="full_presets_mapping_no_loaded_slots">The printer did not report any loaded slots.</string>
     <string name="full_presets_mapping_unknown">Unknown</string>
     <string name="full_presets_mapping_loaded">Loaded</string>
     <string name="full_presets_mapping_empty">Empty</string>
     <string name="full_presets_mapping_presence_unknown">Loading status unknown</string>
-    <string name="full_presets_mapping_slot_report">E%1$d · %2$s · %3$s · %4$s · %5$s · %6$s</string>
-    <string name="full_presets_mapping_choose_presets">Slicer presets by physical slot</string>
+    <string name="full_presets_mapping_slot_report">Printer reports E%1$d · %2$s · %3$s · %4$s · %5$s</string>
+    <string name="full_presets_mapping_choose_presets">Edit slicer presets by slot</string>
+    <string name="full_presets_mapping_hide_presets">Hide slicer presets</string>
+    <string name="full_presets_mapping_presets_current">Uses the slicer presets in Print setup. Check that they suit the material loaded in the printer.</string>
+    <string name="full_presets_mapping_presets_needed">Choose a slicer preset for each physical slot before applying the mapping.</string>
     <string name="full_presets_mapping_physical_preset">Slicer preset for E%1$d</string>
     <string name="full_presets_mapping_apply">Use printer filaments</string>
     <string name="full_presets_mapping_recheck">Could not confirm the mapped filaments. Refresh and apply the mapping again in Print setup.</string>

@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,46 +101,37 @@ internal fun FullPresetSettingsSheet(
 @Composable
 private fun SettingsFields(state: FullPresetUiState, viewModel: FullPresetViewModel) {
     if (state.bundles.isEmpty()) return
-    val enabled = state.operation == null
-    val nameCounts = remember(state.bundles) { state.bundles.groupingBy { it.displayName }.eachCount() }
-    PresetPicker(
-        tag = "full-presets-bundle",
-        label = stringResource(R.string.full_presets_bundle),
-        selected = state.bundleId,
-        entries = state.bundles.map {
-            val name = if (nameCounts.getValue(it.displayName) > 1) {
-                stringResource(R.string.full_presets_duplicate_bundle_name, it.displayName, it.id.take(8))
-            } else it.displayName
-            it.id to name
-        },
-        enabled = enabled,
-        onSelect = viewModel::selectBundle,
-    )
-
-    val bundle = state.bundle ?: return
-    val selection = state.selection ?: return
+    val bundle = state.bundle
+    val selection = state.selection
     val selectable = remember(bundle) {
-        bundle.catalog.filter { it.isSelectable }.groupBy { it.category }
+        bundle?.catalog.orEmpty().filter { it.isSelectable }.groupBy { it.category }
             .mapValues { (_, presets) -> presets.map { it.path to it.name } }
     }
-    PresetPicker(
-        tag = "full-presets-printer",
-        label = stringResource(R.string.full_presets_printer),
-        selected = selection.printer,
-        entries = selectable[FullPresetStore.Category.PRINTER].orEmpty(),
-        enabled = enabled,
-        onSelect = viewModel::selectPrinter,
-    )
-    PresetPicker(
-        tag = "full-presets-process",
-        label = stringResource(R.string.full_presets_process),
-        selected = selection.process,
-        entries = selectable[FullPresetStore.Category.PROCESS].orEmpty(),
-        enabled = enabled,
-        onSelect = viewModel::selectProcess,
-    )
-    FullPresetPrinterFilamentFields(state, viewModel, selectable[FullPresetStore.Category.FILAMENT].orEmpty())
-    if (state.filamentMapping != null) return
+    val modelPath = state.model?.file?.path
+    val canChooseMapping = modelPath != null && bundle != null && selection != null
+    var mappingOpen by rememberSaveable(modelPath) { mutableStateOf(state.filamentMapping != null) }
+    var qualityOpen by rememberSaveable(modelPath) { mutableStateOf(false) }
+    if (canChooseMapping) {
+        FullPresetPrinterFilamentFields(
+            state, viewModel, selectable[FullPresetStore.Category.FILAMENT].orEmpty(), mappingOpen,
+            onExpandedChanged = { mappingOpen = it },
+        )
+        if (!mappingOpen) {
+            TextButton(
+                onClick = { qualityOpen = !qualityOpen },
+                modifier = Modifier.testTag("full-presets-printer-and-quality"),
+            ) {
+                Text(stringResource(
+                    if (qualityOpen) R.string.full_presets_quality_hide else R.string.full_presets_quality_show,
+                ))
+            }
+        }
+    }
+    if (!canChooseMapping || (!mappingOpen && qualityOpen)) {
+        PrinterQualityFields(state, viewModel, selectable)
+    }
+    if (selection == null || state.filamentMapping != null || (canChooseMapping && mappingOpen)) return
+    val enabled = state.operation == null
     selection.filaments.forEachIndexed { index, path ->
         PresetPicker(
             tag = "full-presets-filament-${index + 1}",
@@ -166,6 +158,46 @@ private fun SettingsFields(state: FullPresetUiState, viewModel: FullPresetViewMo
             Text(stringResource(R.string.full_presets_remove_filament), textAlign = TextAlign.Center)
         }
     }
+}
+
+@Composable
+private fun PrinterQualityFields(
+    state: FullPresetUiState,
+    viewModel: FullPresetViewModel,
+    selectable: Map<FullPresetStore.Category, List<Pair<String, String>>>,
+) {
+    val enabled = state.operation == null
+    val nameCounts = remember(state.bundles) { state.bundles.groupingBy { it.displayName }.eachCount() }
+    PresetPicker(
+        tag = "full-presets-bundle",
+        label = stringResource(R.string.full_presets_bundle),
+        selected = state.bundleId,
+        entries = state.bundles.map {
+            val name = if (nameCounts.getValue(it.displayName) > 1) {
+                stringResource(R.string.full_presets_duplicate_bundle_name, it.displayName, it.id.take(8))
+            } else it.displayName
+            it.id to name
+        },
+        enabled = enabled,
+        onSelect = viewModel::selectBundle,
+    )
+    val selection = state.selection ?: return
+    PresetPicker(
+        tag = "full-presets-printer",
+        label = stringResource(R.string.full_presets_printer),
+        selected = selection.printer,
+        entries = selectable[FullPresetStore.Category.PRINTER].orEmpty(),
+        enabled = enabled,
+        onSelect = viewModel::selectPrinter,
+    )
+    PresetPicker(
+        tag = "full-presets-process",
+        label = stringResource(R.string.full_presets_process),
+        selected = selection.process,
+        entries = selectable[FullPresetStore.Category.PROCESS].orEmpty(),
+        enabled = enabled,
+        onSelect = viewModel::selectProcess,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

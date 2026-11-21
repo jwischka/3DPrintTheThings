@@ -9,6 +9,7 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.u1.slicer.NativeLibrary
+import com.u1.slicer.LongOpService
 import com.u1.slicer.R
 import com.u1.slicer.data.ModelFileNaming
 import com.u1.slicer.data.SliceConfig
@@ -23,6 +24,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
@@ -57,7 +60,12 @@ internal data class FullPresetModel(
     val filaments: FullPresetModelFilaments? = null,
 )
 
-internal data class FullPresetOutput(val filename: String, val result: SliceResult)
+internal data class FullPresetOutput(
+    val filename: String,
+    val result: SliceResult,
+    val mapping: FullPresetAppliedFilamentMapping? = null,
+    val presetNames: List<String> = emptyList(),
+)
 
 internal enum class FullPresetOperation(@StringRes val label: Int) {
     READING_BUNDLES(R.string.full_presets_reading_bundles),
@@ -66,6 +74,7 @@ internal enum class FullPresetOperation(@StringRes val label: Int) {
     SLICING(R.string.full_presets_slicing),
     CANCELLING(R.string.full_presets_cancelling),
     EXPORTING(R.string.full_presets_exporting),
+    PRINTING(R.string.full_presets_print_sending),
 }
 
 internal data class FullPresetNotice(@StringRes val message: Int, val detail: String? = null)
@@ -80,6 +89,7 @@ internal data class FullPresetUiState(
     val refreshingPrinterFilaments: Boolean = false,
     val filamentMapping: FullPresetAppliedFilamentMapping? = null,
     val output: FullPresetOutput? = null,
+    val printReview: FullPresetPrintReview? = null,
     val operation: FullPresetOperation? = null,
     val progress: Int? = null,
     val error: FullPresetNotice? = null,
@@ -99,6 +109,9 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
     // Mutations and operation ownership are on the main thread. Native progress only updates StateFlow.
     private var operationJob: Job? = null
     private var sliceCancellation: SliceCancellation? = null
+    private var printReviewJob: Job? = null
+    private var terminalPrintReview: FullPresetPrintReview? = null
+    private val printService by lazy { FullPresetPrintService(printerConnection) }
 
     init {
         runOperation(FullPresetOperation.READING_BUNDLES, R.string.full_presets_read_bundles_failed) {
@@ -132,6 +145,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
             selection = FullPresetSelection(bundle),
             filamentMapping = null,
             output = null,
+            printReview = null,
             error = null,
             status = null,
         )
@@ -163,7 +177,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         if (snapshot.operation != null) return
         val updated = transform(selection)
         if (updated != selection) {
-            mutableState.value = snapshot.copy(selection = updated, filamentMapping = null, output = null, error = null, status = null)
+            mutableState.value = snapshot.copy(selection = updated, filamentMapping = null, output = null, printReview = null, error = null, status = null)
         }
     }
 
@@ -205,7 +219,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                 else if (!current || !reported.snapshot.isFresh(SystemClock.elapsedRealtime())) {
                     state.copy(printerFilaments = FullPresetPrinterFilaments.Unavailable(reported))
                 } else {
-                    state.copy(filamentMapping = mapping, output = null, error = null, status = null)
+                    state.copy(filamentMapping = mapping, output = null, printReview = null, error = null, status = null)
                 }
             }
         }
@@ -214,7 +228,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
     fun useManualFilaments() {
         mutableState.update { state ->
             if (state.operation != null || state.filamentMapping == null) state
-            else state.copy(filamentMapping = null, output = null, error = null, status = null)
+            else state.copy(filamentMapping = null, output = null, printReview = null, error = null, status = null)
         }
     }
 
@@ -339,7 +353,9 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                     mutableState.update { it.copy(status = R.string.full_presets_slice_cancelled) }
                 } else {
                     val name = ModelFileNaming.baseName(model.name, model.file.name).take(128) + ".gcode"
-                    mutableState.update { it.copy(output = FullPresetOutput(name, result)) }
+                    val catalog = bundle.catalog.associateBy { it.path }
+                    val names = (mapping?.physicalPresets ?: selection.filaments).map { catalog.getValue(it).name }
+                    mutableState.update { it.copy(output = FullPresetOutput(name, result, mapping, names)) }
                 }
             } finally {
                 sliceCancellation = null
@@ -372,6 +388,130 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         }
     }
 
+    fun openPrintReview() {
+        val snapshot = state.value
+        val output = snapshot.output ?: return
+        if (snapshot.operation != null) return
+        printReviewJob?.cancel()
+        val terminal = terminalPrintReview?.takeIf { it.output === output }
+        if (terminal != null) {
+            mutableState.update { it.copy(printReview = terminal) }
+            return
+        }
+        val review = FullPresetPrintReview(output)
+        mutableState.update { it.copy(printReview = review) }
+        val mapping = output.mapping
+        if (mapping == null) {
+            mutableState.update { it.copy(printReview = review.copy(
+                phase = FullPresetPrintPhase.FAILED, message = R.string.full_presets_print_requires_mapping,
+            )) }
+            return
+        }
+        printReviewJob = viewModelScope.launch {
+            var prepared = review
+            try {
+                prepared = runInterruptible(Dispatchers.IO) {
+                    val file = File(output.result.gcodePath)
+                    val usage = FullPresetGcodeInspection.inspect(file)
+                    review.copy(
+                        usage = usage,
+                        job = FullPresetPrintJob(file, output.filename, mapping.confirmed,
+                            usage.requiredSlots, usage.sha256, usage.bytes, usage.materialTypesBySlot),
+                    )
+                }
+                val result = withContext(Dispatchers.IO) { printService.review(requireNotNull(prepared.job)) }
+                prepared = prepared.withResult(result)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                prepared = prepared.copy(phase = FullPresetPrintPhase.FAILED,
+                    message = R.string.full_presets_print_invalid_job)
+            }
+            // Closing the sheet, replacing the model, or starting another operation discards late reads.
+            mutableState.update { current ->
+                if (current.output === output && current.printReview === review) current.copy(printReview = prepared)
+                else current
+            }
+        }
+    }
+
+    fun refreshPrintReview() = openPrintReview()
+
+    fun closePrintReview() {
+        if (state.value.operation == FullPresetOperation.PRINTING) return
+        printReviewJob?.cancel()
+        mutableState.update { it.copy(printReview = null) }
+    }
+
+    fun confirmPrint() {
+        val snapshot = state.value
+        val review = snapshot.printReview ?: return
+        val job = review.job ?: return
+        if (review.phase != FullPresetPrintPhase.READY || snapshot.output !== review.output ||
+            terminalPrintReview?.output === review.output) return
+        runOperation(FullPresetOperation.PRINTING, R.string.full_presets_print_failed, invalidateOutput = false) {
+            val application = getApplication<Application>()
+            val startRequested = AtomicBoolean(false)
+            try {
+                LongOpService.start(application, application.getString(R.string.full_presets_print_sending))
+                val result = withContext(Dispatchers.IO) {
+                    printService.send(job) { progress ->
+                        val (phase, percent) = when (progress) {
+                            FullPresetPrintProgress.Checking -> FullPresetPrintPhase.CHECKING to null
+                            is FullPresetPrintProgress.Uploading -> FullPresetPrintPhase.UPLOADING to
+                                (if (progress.totalBytes > 0) (100.0 * progress.sentBytes / progress.totalBytes).toInt().coerceIn(0, 100) else null)
+                            FullPresetPrintProgress.Starting -> {
+                                startRequested.set(true)
+                                FullPresetPrintPhase.STARTING to null
+                            }
+                        }
+                        mutableState.update { it.copy(printReview = review.copy(phase = phase, progressPercent = percent)) }
+                    }
+                }
+                val completed = review.withResult(result)
+                if (completed.phase in setOf(FullPresetPrintPhase.STARTED, FullPresetPrintPhase.UNCERTAIN)) {
+                    terminalPrintReview = completed
+                }
+                mutableState.update { it.copy(printReview = completed) }
+            } catch (cancelled: CancellationException) {
+                if (startRequested.get()) {
+                    terminalPrintReview = review.copy(phase = FullPresetPrintPhase.UNCERTAIN)
+                    mutableState.update { it.copy(printReview = terminalPrintReview) }
+                }
+                throw cancelled
+            } catch (_: Exception) {
+                val failed = review.copy(
+                    phase = if (startRequested.get()) FullPresetPrintPhase.UNCERTAIN else FullPresetPrintPhase.FAILED,
+                    message = if (startRequested.get()) null else R.string.full_presets_print_failed,
+                )
+                if (startRequested.get()) terminalPrintReview = failed
+                mutableState.update { it.copy(printReview = failed) }
+            } finally {
+                LongOpService.stop(application)
+            }
+        }
+    }
+
+    private fun FullPresetPrintReview.withResult(result: FullPresetPrintResult): FullPresetPrintReview = when (result) {
+        is FullPresetPrintResult.Ready -> copy(phase = FullPresetPrintPhase.READY, report = result.current,
+            checkedAtElapsedMillis = result.current.snapshot.receivedAtElapsedMillis, message = null)
+        FullPresetPrintResult.Started -> copy(phase = FullPresetPrintPhase.STARTED, progressPercent = null)
+        FullPresetPrintResult.Uncertain -> copy(phase = FullPresetPrintPhase.UNCERTAIN, progressPercent = null)
+        is FullPresetPrintResult.Failed -> copy(phase = FullPresetPrintPhase.FAILED, progressPercent = null,
+            message = when (result.reason) {
+                FullPresetPrintFailure.INVALID_JOB -> R.string.full_presets_print_invalid_job
+                FullPresetPrintFailure.OUTPUT_CHANGED -> R.string.full_presets_print_output_changed
+                FullPresetPrintFailure.CONNECTION_CHANGED -> R.string.full_presets_print_connection_changed
+                FullPresetPrintFailure.PRINTER_NOT_READY -> R.string.full_presets_print_printer_not_ready
+                FullPresetPrintFailure.FILAMENT_REPORT_UNAVAILABLE -> R.string.full_presets_print_filament_report_unavailable
+                FullPresetPrintFailure.FILAMENTS_CHANGED -> R.string.full_presets_print_filaments_changed
+                FullPresetPrintFailure.MATERIAL_MISMATCH -> R.string.full_presets_print_material_mismatch
+                FullPresetPrintFailure.UPLOAD_UNCONFIRMED -> R.string.full_presets_print_upload_unconfirmed
+                FullPresetPrintFailure.START_REJECTED -> R.string.full_presets_print_start_rejected
+                FullPresetPrintFailure.BUSY -> R.string.full_presets_print_busy
+            })
+    }
+
     private fun runOperation(
         operation: FullPresetOperation,
         @StringRes failure: Int,
@@ -384,6 +524,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
             operation = operation,
             progress = null,
             output = snapshot.output.takeUnless { invalidateOutput },
+            printReview = snapshot.printReview.takeUnless { invalidateOutput },
             error = null,
             status = null,
         )

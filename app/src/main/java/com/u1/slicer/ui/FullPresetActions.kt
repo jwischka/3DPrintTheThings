@@ -18,9 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Print
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -61,6 +61,7 @@ internal fun PrepareActionBar(
     onImportBundle: () -> Unit,
     onSlice: () -> Unit,
     onCancel: () -> Unit,
+    onReviewPrint: () -> Unit,
     onExport: (String) -> Unit,
 ) {
     Box(
@@ -83,9 +84,18 @@ internal fun PrepareActionBar(
             val output = state.output
             when {
                 operation != null -> OperationProgress(operation, state.progress, onCancel)
-                output != null -> PrimaryAction(
-                    R.string.full_presets_export, Icons.Outlined.Download, "full-presets-export",
-                ) { onExport(output.filename) }
+                output != null -> {
+                    PrimaryAction(
+                        R.string.full_presets_review_and_print, Icons.Outlined.Print,
+                        "full-presets-review-print", onReviewPrint,
+                    )
+                    TextButton(
+                        onClick = { onExport(output.filename) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("full-presets-export"),
+                    ) {
+                        Text(stringResource(R.string.full_presets_export), textAlign = TextAlign.Center)
+                    }
+                }
                 state.model == null -> PrimaryAction(
                     R.string.full_presets_import_model, Icons.Outlined.UploadFile, "full-presets-import-model", onImportModel,
                 )

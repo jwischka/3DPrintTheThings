@@ -67,12 +67,48 @@ and activity rotation, with zoom relative to the fitted viewport. Fit resets
 that pose; a new import starts fitted. A rejected replacement leaves the previous model available.
 A display-budget or preview export failure leaves the imported file and its
 filament assignments available for slicing and printer mapping.
+The preview displays the source model's colors. The mapping summary shows the
+chosen physical destinations and their reported spool colors.
 
 Slicing reloads the cached source under the same mutex and uses the selected
 geometry-only manifest. Export copies the generated G-code bytes. Changing
 inputs or encountering a failed import or slice clears the exportable result.
 Cancellation keeps the workflow busy until the native operation returns and its
 model and profile state have been reset.
+
+## Print review and dispatch
+
+Print review binds a v3 slice to its G-code file, the confirmed spool report
+and the printer connection revision. The slice already addresses physical U1
+tools. Review streams up to 256 MiB of G-code with a bounded line buffer,
+recording the exact byte count and SHA-256 digest. It checks tool selections,
+heaters, recognized startup commands, and extrusion moves, including support and
+wipe moves. Startup commands can require a tool even when its estimated
+filament use is zero. Ambiguous commands or tool indices outside E1 through E4
+block dispatch.
+
+Review shows the required slots, reported spool details, selected slicer presets
+and per-slot filament estimates when the file provides them. Required slots
+must be confirmed loaded, and each reported material family must match the
+corresponding family in the slice configuration. The user reviews the reported
+spool and the selected preset together because a material-family match does not
+establish that the preset is suitable for a particular brand or subtype.
+
+After explicit confirmation, dispatch checks the file, connection, printer
+readiness and fresh spool report before uploading. It uploads once under a
+unique filename with `print=false` and the SHA-256 checksum, which Moonraker
+validates before publishing the file. The receipt must identify the expected file
+and byte count and confirm that it was neither started nor queued. Dispatch
+rechecks the local file, connection revision, readiness and spool report after
+upload. Changed spool details or connection credentials block the start.
+
+The U1 advanced WebSocket start submits the filename and all four identity
+mappings in one request to `server.files.start_local_print`. This preserves the
+physical tool assignments produced by slicing. The connection must still match
+and the last report must still be fresh when the request is sent. The app treats
+a lost or ambiguous acknowledgment as uncertain and does not resend the start.
+A confirmed or uncertain start is terminal for the same slice result in the
+current workspace session. The operator can check the Printer tab for job status.
 
 ## Printer tab
 

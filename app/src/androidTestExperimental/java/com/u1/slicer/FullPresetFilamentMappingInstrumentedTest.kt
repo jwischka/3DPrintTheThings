@@ -16,12 +16,16 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.u1.slicer.network.U1FilamentSnapshot
+import com.u1.slicer.presets.FullPresetPrintPhase
 import com.u1.slicer.presets.FullPresetStore
 import com.u1.slicer.presets.FullPresetViewModel
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -34,6 +38,8 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class FullPresetFilamentMappingInstrumentedTest {
@@ -58,22 +64,60 @@ class FullPresetFilamentMappingInstrumentedTest {
         val initialReply = CountDownLatch(1)
         val refreshRequest = CountDownLatch(1)
         val refreshReply = CountDownLatch(1)
+        val uploadRequest = CountDownLatch(1)
+        val uploadReply = CountDownLatch(1)
         val requests = AtomicInteger()
+        val uploads = AtomicInteger()
+        val starts = AtomicInteger()
+        val gcodeBytes = AtomicLong()
+        val remoteName = AtomicReference<String>()
+        val startCall = AtomicReference<JSONObject>()
         try {
             MockWebServer().use { server ->
                 server.start(InetAddress.getByName("127.0.0.1"), 0)
                 assertTrue(prefs.edit().putString("endpoint", "http://127.0.0.1:${server.port}").commit())
                 server.dispatcher = object : Dispatcher() {
                     override fun dispatch(request: RecordedRequest): MockResponse {
-                        if (request.method != "GET" ||
-                            request.path != "/printer/objects/query?${U1FilamentSnapshot.OBJECT_QUERY}"
-                        ) return MockResponse().setResponseCode(404)
+                        when (request.method to request.path) {
+                            "GET" to "/server/info" -> return MockResponse().setBody(SERVER_READY)
+                            "GET" to "/printer/objects/query?webhooks&print_stats&machine_state_manager=main_state" ->
+                                return MockResponse().setBody(PRINTER_READY)
+                            "GET" to "/websocket" -> return MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                                override fun onMessage(webSocket: WebSocket, text: String) {
+                                    val call = JSONObject(text)
+                                    startCall.set(call)
+                                    starts.incrementAndGet()
+                                    val result = JSONObject().put("state", "success").put("filename", remoteName.get())
+                                    webSocket.send(JSONObject().put("jsonrpc", "2.0").put("id", call.get("id")).put("result", result).toString())
+                                }
+
+                                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                                    webSocket.close(code, reason)
+                                }
+                            })
+                            "POST" to "/server/files/upload" -> {
+                                uploads.incrementAndGet()
+                                val body = request.body.readUtf8()
+                                val filename = Regex("filename=\"([A-Za-z0-9_-]+\\.gcode)\"").find(body)?.groupValues?.get(1)
+                                if (filename == null || !body.contains("name=\"print\"") || !body.contains("\r\nfalse\r\n")) {
+                                    return MockResponse().setResponseCode(400)
+                                }
+                                remoteName.set(filename)
+                                uploadRequest.countDown()
+                                if (!uploadReply.await(60, TimeUnit.SECONDS)) return MockResponse().setResponseCode(504)
+                                return MockResponse().setBody(
+                                    """{"result":{"item":{"root":"gcodes","path":"$filename","size":${gcodeBytes.get()}},"print_started":false,"print_queued":false}}""",
+                                )
+                            }
+                            "GET" to "/printer/objects/query?${U1FilamentSnapshot.OBJECT_QUERY}" -> Unit
+                            else -> return MockResponse().setResponseCode(404)
+                        }
                         val received: CountDownLatch
                         val release: CountDownLatch
                         when (requests.incrementAndGet()) {
                             1 -> { received = initialRequest; release = initialReply }
                             2 -> { received = refreshRequest; release = refreshReply }
-                            else -> return MockResponse().setResponseCode(429)
+                            else -> return MockResponse().setBody(SLOTS)
                         }
                         received.countDown()
                         return if (release.await(60, TimeUnit.SECONDS)) MockResponse().setBody(SLOTS)
@@ -110,17 +154,20 @@ class FullPresetFilamentMappingInstrumentedTest {
                             initialReply.countDown()
                             waitForText(R.string.full_presets_mapping_fresh)
 
-                            control("full-presets-map-source-1").assertIsEnabled().performClick()
+                            control("full-presets-map-source-1-option-2").assertIsEnabled()
                             compose.onNodeWithTag("full-presets-map-source-1-option-1").assertDoesNotExist()
                             // Deliberately send the original red and black to the opposite reported colors.
-                            compose.onNodeWithTag("full-presets-map-source-1-option-2").assertIsDisplayed().performClick()
-                            control("full-presets-map-source-2").assertIsEnabled().performClick()
-                            compose.onNodeWithTag("full-presets-map-source-2-option-3").assertIsDisplayed().performClick()
+                            control("full-presets-map-source-1-option-2").performClick()
+                            control("full-presets-map-source-2-option-3").assertIsEnabled().performClick()
+                            control("full-presets-map-source-1")
+                            saveFullPresetScreenshot("filament-mapping")
+                            compose.onNodeWithTag("full-presets-filament-1").assertDoesNotExist()
+                            compose.onNodeWithTag("full-presets-map-preset-1").assertDoesNotExist()
+                            control("full-presets-physical-presets").performClick()
                             for (slot in 1..4) {
-                                val picker = "full-presets-map-preset-$slot"
-                                control(picker).assertIsEnabled().performClick()
-                                compose.onNodeWithTag("$picker-option-$preset").performScrollTo().performClick()
+                                control("full-presets-map-preset-$slot").assertIsEnabled()
                             }
+                            control("full-presets-physical-presets").performClick()
                             waitForText(R.string.full_presets_mapping_stale)
                             control(APPLY).assertIsNotEnabled()
                             control(REFRESH).assertIsEnabled().performClick()
@@ -137,8 +184,49 @@ class FullPresetFilamentMappingInstrumentedTest {
                             val mapping = requireNotNull(model.state.value.filamentMapping)
                             assertEquals(mapOf(1 to 2, 2 to 3), mapping.targets)
                             assertEquals(listOf(2, 3), mapping.positionalMapping)
-                            assertEquals(List(4) { preset }, mapping.physicalPresets)
+                            val selected = requireNotNull(model.state.value.selection).filaments
+                            assertEquals(List(4) { index -> selected.getOrNull(index) ?: preset }, mapping.physicalPresets)
                             assertEquals(2, requests.get())
+
+                            compose.onNodeWithTag("full-presets-settings-done").performClick()
+                            compose.onNodeWithTag("full-presets-slice").assertIsEnabled().performClick()
+                            idle()
+                            assertNull(model.state.value.error)
+                            val output = requireNotNull(model.state.value.output)
+                            gcodeBytes.set(File(output.result.gcodePath).length())
+                            compose.onNodeWithTag("full-presets-export").assertIsEnabled()
+                            compose.onNodeWithTag("full-presets-review-print").performClick()
+                            waitForText(R.string.full_presets_print_review_ready)
+                            val review = requireNotNull(model.state.value.printReview)
+                            assertEquals(FullPresetPrintPhase.READY, review.phase)
+                            assertEquals(setOf(2, 3), review.usage?.requiredSlots)
+                            control("full-presets-print-tool-2").assertIsDisplayed()
+                            control("full-presets-print-tool-3").assertIsDisplayed()
+                            control("full-presets-print-tool-2")
+                            saveFullPresetScreenshot("print-review")
+                            compose.onNodeWithTag("full-presets-print-tool-1").assertDoesNotExist()
+                            assertEquals(0, uploads.get())
+                            assertEquals(0, starts.get())
+
+                            compose.onNodeWithTag("full-presets-confirm-print").assertIsEnabled().performClick()
+                            assertTrue("Expected an upload only after confirmation", uploadRequest.await(20, TimeUnit.SECONDS))
+                            compose.onNodeWithTag("full-presets-close-print-review").assertIsNotEnabled()
+                            scenario.onActivity { model.confirmPrint() }
+                            assertEquals(1, uploads.get())
+                            assertEquals(0, starts.get())
+                            uploadReply.countDown()
+                            waitForText(R.string.full_presets_print_review_started)
+                            idle()
+                            val call = requireNotNull(startCall.get())
+                            assertEquals("server.files.start_local_print", call.getString("method"))
+                            assertEquals(remoteName.get(), call.getJSONObject("params").getString("path"))
+                            assertEquals(1, starts.get())
+                            compose.onNodeWithTag("full-presets-close-print-review").performClick()
+                            compose.onNodeWithTag("full-presets-review-print").performClick()
+                            waitForText(R.string.full_presets_print_review_started)
+                            compose.onNodeWithTag("full-presets-confirm-print").assertDoesNotExist()
+                            assertEquals(1, uploads.get())
+                            assertEquals(1, starts.get())
                         } catch (failure: Throwable) {
                             runCatching { saveFullPresetScreenshot("filament-mapping-failed-screen") }
                             throw failure
@@ -147,6 +235,7 @@ class FullPresetFilamentMappingInstrumentedTest {
                 } finally {
                     initialReply.countDown()
                     refreshReply.countDown()
+                    uploadReply.countDown()
                 }
             }
         } finally {
@@ -167,6 +256,8 @@ class FullPresetFilamentMappingInstrumentedTest {
     private companion object {
         const val REFRESH = "full-presets-refresh-printer-filaments"
         const val APPLY = "full-presets-apply-printer-filaments"
+        const val SERVER_READY = """{"result":{"klippy_connected":true,"klippy_state":"ready"}}"""
+        const val PRINTER_READY = """{"result":{"status":{"webhooks":{"state":"ready"},"print_stats":{"state":"standby"},"machine_state_manager":{"main_state":0}}}}"""
         const val SLOTS = """
             {"result":{"status":{"print_task_config":{
                 "filament_exist":[false,true,true,false],

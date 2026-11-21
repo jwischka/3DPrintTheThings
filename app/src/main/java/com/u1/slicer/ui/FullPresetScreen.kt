@@ -86,6 +86,7 @@ import com.u1.slicer.library.DownloadEntry
 import com.u1.slicer.library.LibraryScreen
 import com.u1.slicer.presets.FullPresetCatalogTransfer
 import com.u1.slicer.presets.FullPresetCatalogViewModel
+import com.u1.slicer.presets.FullPresetOperation
 import com.u1.slicer.presets.FullPresetViewModel
 import com.u1.slicer.ui.printer.experimental.ExperimentalPrinterDashboard
 import java.io.IOException
@@ -143,6 +144,7 @@ internal fun FullPresetScreen(
             onImportBundle = importBundle,
             onSlice = model::slice,
             onCancel = model::cancelSlice,
+            onReviewPrint = model::openPrintReview,
             onExport = { exportLauncher.launch(it) },
         )
     }
@@ -363,6 +365,19 @@ internal fun FullPresetScreen(
                 importBundle()
             },
             onDismiss = { settingsOpen = false },
+        )
+    }
+    state.printReview?.let { review ->
+        FullPresetPrintReviewDialog(
+            review = review,
+            printInProgress = state.operation == FullPresetOperation.PRINTING,
+            onDismiss = model::closePrintReview,
+            onRefresh = model::refreshPrintReview,
+            onConfirm = model::confirmPrint,
+            onPrintSetup = {
+                model.closePrintReview()
+                settingsOpen = true
+            },
         )
     }
 }
