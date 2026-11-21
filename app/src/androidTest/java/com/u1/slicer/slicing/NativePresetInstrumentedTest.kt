@@ -383,18 +383,117 @@ class NativePresetInstrumentedTest {
         assertEquals("The color segmentation palette must match the two selected filaments",
             2, appliedConfig.getString("filament_colour").split(';').size)
         assertFalse("Project G-code survived incorporation of color paint", gcode.readText().contains("PROJECT_SENTINEL"))
-        val secondPartTools = GcodeParser.parse(gcode).layers.flatMap { it.moves }.filter { move ->
-            move.type == MoveType.EXTRUDE && move.featureType != FeatureType.PRIME_TOWER &&
-                move.x0 in 144.5f..165.5f && move.x1 in 144.5f..165.5f &&
-                move.y0 in 129.5f..140.5f && move.y1 in 129.5f..140.5f
-        }.map { it.extruder }.toSet()
-        assertEquals("The same model part must extrude both its base and painted filaments", setOf(0, 1), secondPartTools)
+        assertEquals("The same model part must extrude both its base and painted filaments",
+            setOf(0, 1), secondPartTools(gcode))
         assertEquals(originalBounds, native.nativeGetObjectWorldAABBMins().toList())
         assertEquals(originalConfig, native.nativeGetProjectConfig())
         assertEquals(originalPaint, native.nativeGetPaintStateCounts(0, 1, 0)?.toList())
         assertEquals(1, native.nativeGetVolumeExtruder(0, 1))
         assertEquals(originalHash, sha256(project))
     }
+
+    @Test fun geometryOnlyMapsPaintAndBaseToPhysicalTools() {
+        val project = projectFixture(paint = "8", secondPartExtruder = 1)
+        val originalHash = sha256(project)
+        assertTrue("Color-painted project could not load", native.loadModel(project.absolutePath))
+        val originalBounds = native.nativeGetObjectWorldAABBMins().toList()
+        val originalConfig = native.nativeGetProjectConfig()
+        val originalPaint = requireNotNull(native.nativeGetPaintStateCounts(0, 1, 0)).toList()
+        assertEquals(listOf(2, 2), originalPaint)
+        assertEquals(1, native.nativeGetVolumeExtruder(0, 1))
+
+        fun sliceWithMapping(mapping: List<Int>): File {
+            val manifest = File(bundle, "mapped-${mapping.joinToString("-")}.json").apply {
+                writeText(mappedGeometryManifest(JSONArray(mapping)).toString())
+            }
+            assertTrue("Native rejected mapping $mapping", native.loadProfile(manifest.absolutePath))
+            val result = native.slice(SliceConfig()) ?: error("Missing mapped slice result")
+            assertTrue(result.errorMessage, result.success)
+            return File(result.gcodePath)
+        }
+
+        for ((mapping, tools) in listOf(listOf(3, 4) to setOf(2, 3), listOf(3, 3) to setOf(2))) {
+            val gcode = sliceWithMapping(mapping)
+            assertEquals("Physical tools on the same model part for mapping $mapping", tools, secondPartTools(gcode))
+            assertFalse(gcode.readText().contains("PROJECT_SENTINEL"))
+        }
+
+        assertEquals(originalBounds, native.nativeGetObjectWorldAABBMins().toList())
+        assertEquals(originalConfig, native.nativeGetProjectConfig())
+        assertEquals(originalPaint, native.nativeGetPaintStateCounts(0, 1, 0)?.toList())
+        assertEquals(1, native.nativeGetVolumeExtruder(0, 1))
+        assertEquals(originalHash, sha256(project))
+
+        // Read right to left: a one-side split (1), an unpainted leaf (0), and a slot-2 leaf (8).
+        val splitProject = projectFixture(paint = "801", objectExtruder = 0, secondPartExtruder = 0)
+        assertTrue("Project with subdivided paint could not load", native.loadModel(splitProject.absolutePath))
+        val objects = JSONArray(requireNotNull(native.nativeGetObjectExtruderMap()))
+        assertEquals("Object must use the default source slot", 0, objects.getJSONObject(0).getInt("extruder"))
+        val volume = requireNotNull(native.nativeGetVolumeScalars(0, 1))
+        assertEquals("Painted part must inherit its object tool", -1, volume[0])
+        assertEquals(listOf(2, 2), native.nativeGetPaintStateCounts(0, 1, 0)?.toList())
+        val splitGcode = sliceWithMapping(listOf(3, 4))
+        assertEquals("The default base and subdivided paint must use E3 and E4",
+            setOf(2, 3), secondPartTools(splitGcode))
+    }
+
+    @Test fun invalidModelFilamentMappingsFailClosed() {
+        val valid = mappedGeometryManifest(JSONArray(listOf(3, 4)))
+        fun change(key: String, value: Any) = JSONObject(valid.toString()).put(key, value)
+        val mappingKey = "model_filament_mapping"
+        val singleNozzlePath = "machine/single-nozzle-semm.json"
+        val singleNozzle = JSONObject(File(bundle, valid.getString("printer")).readText())
+            .put("nozzle_diameter", JSONArray().put("0.4"))
+            .put("single_extruder_multi_material", "1")
+        File(bundle, singleNozzlePath).writeText(singleNozzle.toString())
+        val invalid = listOf(
+            "missing" to JSONObject(valid.toString()).apply { remove(mappingKey) },
+            "extra" to change("extra", true),
+            "missing-policy" to JSONObject(valid.toString()).apply { remove("project_settings") },
+            "wrong-policy" to change("project_settings", "project"),
+            "non-array" to change(mappingKey, "3,4"),
+            "empty" to change(mappingKey, JSONArray()),
+            "five" to change(mappingKey, JSONArray(listOf(1, 2, 3, 4, 4))),
+            "string-target" to change(mappingKey, JSONArray(listOf("3"))),
+            "fractional-target" to change(mappingKey, JSONArray(listOf(1.5))),
+            "zero-target" to change(mappingKey, JSONArray(listOf(0))),
+            "high-target" to change(mappingKey, JSONArray(listOf(5))),
+            "large-target" to change(mappingKey, JSONArray(listOf(Long.MAX_VALUE))),
+            "single-physical-slot" to change("filaments", JSONArray().put(valid.getJSONArray("filaments").getString(0))),
+            "single-nozzle-semm" to change("printer", singleNozzlePath),
+        )
+        for ((name, manifest) in invalid) {
+            val file = File(bundle, "invalid-mapping-$name.json").apply { writeText(manifest.toString()) }
+            assertFalse("$name mapping was accepted", native.loadProfile(file.absolutePath))
+            val result = native.slice(SliceConfig()) ?: error("Missing result for $name mapping")
+            assertFalse("$name mapping did not block slicing", result.success)
+            assertTrue(result.errorMessage, result.errorMessage.contains("Preset load failed"))
+        }
+
+        val oneSource = File(bundle, "one-source-mapping.json").apply {
+            writeText(mappedGeometryManifest(JSONArray(listOf(3))).toString())
+        }
+        assertTrue(native.loadProfile(oneSource.absolutePath))
+
+        val invalidModels = listOf(
+            projectFixture(secondPartExtruder = 2) to "Model references an unavailable filament",
+            projectFixture(paint = "8", secondPartExtruder = 1) to "Color paint references an unavailable filament",
+            projectFixture(paint = "2C", secondPartExtruder = 1) to "color paint on filament slots 1 through 4",
+        )
+        for ((project, message) in invalidModels) {
+            assertTrue(native.loadModel(project.absolutePath))
+            val result = native.slice(SliceConfig()) ?: error("Missing mapped slice result")
+            assertFalse("Mapped slice accepted unsupported source assignment", result.success)
+            assertTrue(result.errorMessage, result.errorMessage.contains(message))
+        }
+    }
+
+    private fun secondPartTools(gcode: File): Set<Int> =
+        GcodeParser.parse(gcode).layers.flatMap { it.moves }.filter { move ->
+            move.type == MoveType.EXTRUDE && move.featureType != FeatureType.PRIME_TOWER &&
+                move.x0 in 144.5f..165.5f && move.x1 in 144.5f..165.5f &&
+                move.y0 in 129.5f..140.5f && move.y1 in 129.5f..140.5f
+        }.map { it.extruder }.toSet()
 
     @Test fun geometryOnlyRejectsUnsupportedPaintAndModifierVolumes() {
         assertTrue(native.loadProfile(geometryOnlyManifest().absolutePath))
@@ -434,12 +533,17 @@ class NativePresetInstrumentedTest {
         writeText(manifest.put("schema", "orca-native-presets-v2").put("project_settings", "geometry-only").toString())
     }
 
+    private fun mappedGeometryManifest(mapping: JSONArray): JSONObject =
+        JSONObject(geometryOnlyManifest().readText()).put("schema", "orca-native-presets-v3")
+            .put("model_filament_mapping", mapping)
+
     private fun projectFixture(
         subtype: String = "normal_part",
         paint: String = "",
         overrides: Boolean = true,
         secondPartExtruder: Int = 2,
         paintAttribute: String = "paint_color",
+        objectExtruder: Int = 1,
     ): File {
         val vertices = listOf("0 0 0", "10 0 0", "10 10 0", "0 10 0",
             "0 0 10", "10 0 10", "10 10 10", "0 10 10").joinToString("") { xyz ->
@@ -475,7 +579,7 @@ class NativePresetInstrumentedTest {
         val modelSettings = """
             <config><object id="3">
               <metadata key="name" value="Geometry-only test"/>
-              <metadata key="extruder" value="1"/>
+              <metadata key="extruder" value="$objectExtruder"/>
               ${if (overrides) """<metadata key="wall_loops" value="5"/>""" else ""}
               <part id="1" subtype="normal_part">
                 ${if (overrides) """<metadata key="sparse_infill_density" value="0%"/>""" else ""}
@@ -513,7 +617,7 @@ class NativePresetInstrumentedTest {
                 <layer top_z="2" extruder="1" color="" gcode="M117 LAYER_PROJECT_SENTINEL"/>
                 </custom_gcodes_per_layer>""".trimIndent()
         }
-        return File(bundle, "controlled-$subtype-$paintAttribute-$paint-$secondPartExtruder-$overrides.3mf").apply {
+        return File(bundle, "controlled-$subtype-$paintAttribute-$paint-$objectExtruder-$secondPartExtruder-$overrides.3mf").apply {
             ZipOutputStream(outputStream()).use { zip ->
                 for ((path, contents) in entries) {
                     zip.putNextEntry(ZipEntry(path))

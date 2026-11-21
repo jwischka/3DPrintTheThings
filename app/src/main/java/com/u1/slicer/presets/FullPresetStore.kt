@@ -104,8 +104,14 @@ class FullPresetStore(private val root: File) {
         printerPath: String,
         processPath: String,
         filamentPaths: List<String>,
+        modelFilamentMapping: List<Int>? = null,
     ): File = safeOperation("Could not save the full preset selection") {
         checkBundle(idPattern.matches(bundleId), "Preset bundle is unavailable")
+        val mapping = modelFilamentMapping?.toList()
+        if (mapping != null) {
+            checkBundle(filamentPaths.size == 4 && mapping.size in 1..4 && mapping.all { it in 1..4 },
+                "Printer filament mapping requires four physical presets and valid model slots")
+        }
         val directory = File(root, bundleId)
         val source = readManifest(File(directory, manifestName))
         val entries = readEntries(directory, source)
@@ -123,15 +129,17 @@ class FullPresetStore(private val root: File) {
         parents.removeAll(selection.paths)
         checkBundle(parents.size <= maxCatalog, "Preset selection has too many inherited files")
         val json = JSONObject()
-            .put("schema", schemaV2)
+            .put("schema", if (mapping == null) schemaV2 else schemaV3)
             .put("project_settings", geometryOnly)
             .put("printer", printerPath)
             .put("process", processPath)
             .put("filaments", JSONArray(selection.filaments))
             .put("catalog", JSONArray(parents))
+        if (mapping != null) json.put("model_filament_mapping", JSONArray(mapping))
         val bytes = json.toString().toByteArray(Charsets.UTF_8)
         checkBundle(bytes.size <= maxManifestBytes, "Preset selection manifest exceeds the size limit")
-        val manifest = File(directory, selectionName)
+        // Mapping belongs to the imported model and is confirmed for the current session.
+        val manifest = File(directory, if (mapping == null) selectionName else mappedSelectionName)
         val temporary = Files.createTempFile(root.toPath(), ".selection-", ".tmp")
         try {
             Files.write(temporary, bytes)
@@ -384,8 +392,10 @@ class FullPresetStore(private val root: File) {
     private companion object {
         const val manifestName = "manifest.json"
         const val selectionName = ".selection.json"
+        const val mappedSelectionName = ".mapped-selection.json"
         const val schemaV1 = "orca-native-presets-v1"
         const val schemaV2 = "orca-native-presets-v2"
+        const val schemaV3 = "orca-native-presets-v3"
         const val geometryOnly = "geometry-only"
         const val maxManifestBytes = 64L * 1024
         const val maxPresetBytes = 1024L * 1024

@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.annotation.StringRes
 import com.u1.slicer.NativeLibrary
 import com.u1.slicer.R
+import com.u1.slicer.bambu.NativePlateState
+import com.u1.slicer.presets.FullPresetModelFilaments
 import com.u1.slicer.viewer.MeshData
 import com.u1.slicer.viewer.ModelCameraPose
 import com.u1.slicer.viewer.NativeRenderBatch
@@ -33,8 +35,11 @@ internal object FullPresetPreviewLoader {
     // Invalid inputs are reported by import. Preview-only failures leave the copied input sliceable.
     internal class InvalidModel(@StringRes val reason: Int) : Exception()
 
-    suspend fun load(file: File): FullPresetPreview {
-        if (!NativeLibrary.isLoaded) return FullPresetPreview.Unavailable(R.string.full_presets_engine_unavailable)
+    data class Loaded(val preview: FullPresetPreview, val filaments: FullPresetModelFilaments?)
+
+    suspend fun load(file: File): Loaded {
+        if (!NativeLibrary.isLoaded) return Loaded(FullPresetPreview.Unavailable(R.string.full_presets_engine_unavailable), null)
+        var filaments: FullPresetModelFilaments? = null
         return try {
             val (mesh, filamentColors) = NativeLibrary.previewMutex.withLock {
                 val native = NativeLibrary()
@@ -51,6 +56,8 @@ internal object FullPresetPreviewLoader {
                     } else {
                         emptyList()
                     }
+                    filaments = if (file.extension == "3mf") readModelFilaments(native, colors)
+                    else FullPresetModelFilaments(setOf(1), emptyList())
                     readMesh(native) to colors
                 } finally {
                     native.clearModel()
@@ -58,24 +65,49 @@ internal object FullPresetPreviewLoader {
             }
             val context = currentCoroutineContext()
             context.ensureActive()
-            if (mesh == null) {
+            val preview = if (mesh == null) {
                 FullPresetPreview.Unavailable(R.string.full_presets_preview_unavailable)
             } else {
                 // Scene batches emit file-indexed material IDs before the native mesh is compacted.
                 mesh.colorFullPresetPreview(previewPalette(filamentColors)) { context.ensureActive() }
                 FullPresetPreview.Ready(mesh)
             }
+            Loaded(preview, filaments)
         } catch (error: InvalidModel) {
             throw error
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: LinkageError) {
             Log.w(TAG, "Preview engine unavailable", error)
-            FullPresetPreview.Unavailable(R.string.full_presets_engine_unavailable)
+            Loaded(FullPresetPreview.Unavailable(R.string.full_presets_engine_unavailable), filaments)
         } catch (error: Exception) {
             Log.w(TAG, "Failed to prepare model preview", error)
-            FullPresetPreview.Unavailable(R.string.full_presets_preview_unavailable)
+            Loaded(FullPresetPreview.Unavailable(R.string.full_presets_preview_unavailable), filaments)
         }
+    }
+
+    private suspend fun readModelFilaments(native: NativeLibrary, colors: List<String>): FullPresetModelFilaments? {
+        val plate = try {
+            NativePlateState.parseVolumeMapJson(native.nativeGetAllVolumeExtruders())
+        } catch (_: JSONException) {
+            return null
+        }
+        if (plate.objects.isEmpty()) return null
+        val context = currentCoroutineContext()
+        val used = sortedSetOf<Int>()
+        for (obj in plate.objects) {
+            val objectSlot = obj.objectExtruder.takeIf { it > 0 } ?: 1
+            used.add(objectSlot)
+            for (volume in obj.volumes) {
+                context.ensureActive()
+                if (volume.extruder > 0) used.add(volume.extruder)
+                val states = native.nativeGetPaintStateCounts(obj.objectIndex, volume.volumeIndex, 0) ?: return null
+                for (i in 0 until states.size - 1 step 2) {
+                    if (states[i] > 0 && states[i + 1] > 0) used.add(states[i])
+                }
+            }
+        }
+        return FullPresetModelFilaments(used, colors)
     }
 
     private suspend fun readMesh(native: NativeLibrary): MeshData? {

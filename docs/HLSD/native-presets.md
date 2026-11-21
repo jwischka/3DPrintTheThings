@@ -40,6 +40,15 @@ Printer, process and ordered filament selections produce a separate v2 manifest
 with its required parent closure. The original catalog remains available for
 later selections. Selections saved when slicing persist across application recreation.
 
+Print setup can also map an imported model's filament assignments to physical
+U1 tools. The settings sheet shows source colors when present and reads the
+configured printer's reported slot colors, material and loading status. The
+user chooses the destinations and the slicer presets for E1 through E4, then
+confirms the mapping against a fresh report. The app checks all four tools
+again before slicing and requests reconfirmation if their reports or the printer
+connection change. The v3 selection is scoped to the active model session.
+Manual slot selections use the persistent v2 manifest.
+
 Import copies one STL or single-plate 3MF to private cache storage. Preview
 extraction holds the native scene mutex while loading the file and copying
 render batches into Android-owned buffers. The native preview scene is released
@@ -56,8 +65,8 @@ The viewport fits the model and supports orbit,
 pan, and zoom. The imported preview retains its camera pose across tab switches
 and activity rotation, with zoom relative to the fitted viewport. Fit resets
 that pose; a new import starts fitted. A rejected replacement leaves the previous model available.
-A display-budget or preview export failure leaves the imported file available
-for slicing.
+A display-budget or preview export failure leaves the imported file and its
+filament assignments available for slicing and printer mapping.
 
 Slicing reloads the cached source under the same mutex and uses the selected
 geometry-only manifest. Export copies the generated G-code bytes. Changing
@@ -95,9 +104,12 @@ are documented under [Moonraker connections and transfers](printer-connection.md
 A v1 JSON manifest has exactly five fields: `schema` (`orca-native-presets-v1`),
 `printer`, `process`, `filaments` (ordered filenames), and `catalog` (inherited
 preset filenames). The v2 manifest uses `orca-native-presets-v2` and requires a
-sixth field, `"project_settings": "geometry-only"`. Paths are relative to the
-manifest directory and must resolve
-inside it. The manifest is limited to 64 KiB; each preset to 1 MiB; the selected
+sixth field, `"project_settings": "geometry-only"`. The v3 manifest uses
+`orca-native-presets-v3` and adds `model_filament_mapping`, an array of one to
+four integer tool numbers in model-slot order. V3 supplies four physical
+filament presets in E1 through E4 order and requires a printer preset with four
+independent nozzles. Several model slots can map to the same physical tool.
+Paths are relative to the manifest directory and must resolve inside it. The manifest is limited to 64 KiB; each preset to 1 MiB; the selected
 filament list to 16 entries; and the catalog to 128 entries. Files are interpreted
 by the pinned Orca JSON configuration parser. Unknown options, substitutions,
 duplicate names, missing parents, category conflicts and inheritance cycles are
@@ -144,6 +156,14 @@ uses this palette's length to determine the available painted states. Preview
 colors still come from the imported model. Resetting to legacy mode leaves
 the loaded source scene and its embedded settings available. Upstream print
 validation failures are fatal.
+
+V3 uses the same geometry policies as v2. It validates the source model's
+assignments and painted facets against the mapping before copying the scene.
+The slice copy maps material, object and volume assignments and remaps
+color-painted facets to the selected physical tools. An unassigned object uses
+the mapping for model slot 1. An unassigned volume inherits its object's mapped
+tool. Paint states above 4 are rejected before remapping. The imported scene
+keeps its original assignments and paint.
 
 The `full_preset_loaded` diagnostic records relative input filenames, filament
 count and configuration-key count. It does not serialize settings or macros into

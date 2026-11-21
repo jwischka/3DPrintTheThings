@@ -138,6 +138,8 @@ private fun SettingsFields(state: FullPresetUiState, viewModel: FullPresetViewMo
         enabled = enabled,
         onSelect = viewModel::selectProcess,
     )
+    FullPresetPrinterFilamentFields(state, viewModel, selectable[FullPresetStore.Category.FILAMENT].orEmpty())
+    if (state.filamentMapping != null) return
     selection.filaments.forEachIndexed { index, path ->
         PresetPicker(
             tag = "full-presets-filament-${index + 1}",
@@ -168,7 +170,7 @@ private fun SettingsFields(state: FullPresetUiState, viewModel: FullPresetViewMo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PresetPicker(
+internal fun PresetPicker(
     tag: String,
     label: String,
     selected: String?,

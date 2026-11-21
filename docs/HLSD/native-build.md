@@ -90,7 +90,7 @@ ID `io.github.jwischka.threedprintthethings.presets`. It requires a native build
 output directory containing the JNI library, `full-preset-schema.txt`,
 `cxx-runtime.txt` declaring `c++_static`, and their
 `sha256.txt` receipt. Validation runs even when Gradle has cached the packaging
-steps. Missing files, an unsupported ABI, a missing v2 marker or mismatched
+steps. Missing files, an unsupported ABI, a missing v3 marker or mismatched
 checksums stop the build. A leftover shared C++ runtime is rejected. The
 experimental variant compresses its JNI entry so Android extracts it at install
 time; this avoids the uncompressed-library ZIP alignment limitation in AGP 8.2.

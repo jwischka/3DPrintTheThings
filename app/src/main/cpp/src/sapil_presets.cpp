@@ -50,9 +50,11 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     Json spec = Json::parse(stream);
     if (!spec.is_object() || !spec.contains("schema"))
         throw std::runtime_error("Unsupported preset manifest");
-    const bool geometry_only = spec.at("schema") == "orca-native-presets-v2";
+    const bool mapped_filaments = spec.at("schema") == "orca-native-presets-v3";
+    const bool geometry_only = mapped_filaments || spec.at("schema") == "orca-native-presets-v2";
     if (geometry_only) {
-        if (spec.size() != 6 || !spec.contains("project_settings") || spec.at("project_settings") != "geometry-only")
+        if (spec.size() != (mapped_filaments ? 7 : 6) ||
+            !spec.contains("project_settings") || spec.at("project_settings") != "geometry-only")
             throw std::runtime_error("Unsupported preset manifest");
     } else if (spec.size() != 5 || spec.at("schema") != "orca-native-presets-v1") {
         throw std::runtime_error("Unsupported preset manifest");
@@ -62,6 +64,18 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     const auto filaments = spec.at("filaments").get<std::vector<std::string>>();
     const auto catalog = spec.at("catalog").get<std::vector<std::string>>();
     if (filaments.empty() || filaments.size() > 16 || catalog.size() > 128) throw std::runtime_error("Invalid preset count");
+    std::vector<int> model_filament_mapping;
+    if (mapped_filaments) {
+        const auto mapping = spec.find("model_filament_mapping");
+        if (filaments.size() != 4 || mapping == spec.end() || !mapping->is_array() ||
+            mapping->empty() || mapping->size() > 4)
+            throw std::runtime_error("Invalid model filament mapping");
+        for (const auto& target : *mapping) {
+            if (!target.is_number_integer() || target < 1 || target > 4)
+                throw std::runtime_error("Invalid model filament mapping");
+            model_filament_mapping.push_back(target.get<int>());
+        }
+    }
     std::set<std::string> paths(catalog.begin(), catalog.end());
     paths.insert(printer); paths.insert(process); paths.insert(filaments.begin(), filaments.end());
     if (paths.size() > 146) throw std::runtime_error("Invalid preset count");
@@ -104,6 +118,7 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     FullPresetResult result;
     result.geometry_only = geometry_only;
     result.filament_count = filaments.size();
+    result.model_filament_mapping = std::move(model_filament_mapping);
     std::function<const Slic3r::DynamicPrintConfig&(const std::string&, const std::string&)> resolve;
     resolve = [&](const std::string& name, const std::string& type) -> const Slic3r::DynamicPrintConfig& {
         auto found = entries.find(name);
@@ -143,6 +158,8 @@ FullPresetResult load_full_presets(const std::string& manifest_path) {
     const auto* technology = machine.option<Slic3r::ConfigOptionEnumGeneric>("printer_technology");
     if (!technology || technology->value != Slic3r::ptFFF)
         throw std::runtime_error("Only FFF printer presets are supported");
+    if (mapped_filaments && (!nozzles || nozzles->values.size() != 4 || (semm && semm->value)))
+        throw std::runtime_error("Unsupported preset extruder topology");
     if (!nozzles || nozzles->values.empty() || nozzles->values.size() > 16 ||
         (filaments.size() > nozzles->values.size() &&
          !(nozzles->values.size() == 1 && semm && semm->value)))

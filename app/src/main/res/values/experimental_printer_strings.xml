@@ -48,6 +48,14 @@
     <string name="experimental_printer_duration_minutes">%1$d min</string>
     <string name="experimental_printer_duration_hours">%1$d h %2$d min</string>
     <string name="experimental_printer_temperatures">Temperatures</string>
+    <string name="experimental_printer_filaments">Loaded filament</string>
+    <string name="experimental_printer_filaments_received">Filament status received at %1$s</string>
+    <string name="experimental_printer_filaments_stale">Showing filament status from %1$s</string>
+    <string name="experimental_printer_filament_slot">E%1$d</string>
+    <string name="experimental_printer_filament_color">Filament color %1$s</string>
+    <string name="experimental_printer_filament_loaded">Loaded</string>
+    <string name="experimental_printer_filament_empty">Empty</string>
+    <string name="experimental_printer_filament_unknown">Unknown</string>
     <string name="experimental_printer_bed">Bed</string>
     <string name="experimental_printer_nozzle">Tool %1$d</string>
     <string name="experimental_printer_active_nozzle">Tool %1$d · active</string>

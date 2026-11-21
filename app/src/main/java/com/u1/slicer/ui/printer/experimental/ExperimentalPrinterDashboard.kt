@@ -2,9 +2,11 @@ package com.u1.slicer.ui.printer.experimental
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.SystemClock
 import android.text.format.DateFormat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -54,6 +57,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,6 +73,8 @@ import com.u1.slicer.network.MoonrakerHeaterReading
 import com.u1.slicer.network.MoonrakerJsonRead
 import com.u1.slicer.network.MoonrakerStatusResult
 import com.u1.slicer.network.MoonrakerStatusSnapshot
+import com.u1.slicer.network.U1FilamentResult
+import com.u1.slicer.network.U1FilamentSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -144,11 +150,13 @@ private fun ConnectedPrinter(
     var latest by remember(connection, configurationVersion) { mutableStateOf<StatusReading?>(null) }
     var failure by remember(connection, configurationVersion) { mutableStateOf<MoonrakerStatusResult.Unavailable?>(null) }
     var refreshing by remember(connection, configurationVersion) { mutableStateOf(true) }
+    var filaments by remember(connection, configurationVersion) { mutableStateOf<U1FilamentSnapshot?>(null) }
+    var filamentsStale by remember(connection, configurationVersion) { mutableStateOf(false) }
     var client by remember(connection, configurationVersion) { mutableStateOf<MoonrakerClient?>(null) }
     var retryVersion by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(settings, connection, configurationVersion) {
-        client = withContext(Dispatchers.IO) { settings.client(connection) }
+        client = withContext(Dispatchers.IO) { settings.clientIfCurrent(connection) }
     }
     LaunchedEffect(client, lifecycle, retryVersion) {
         val printer = client ?: return@LaunchedEffect
@@ -165,6 +173,22 @@ private fun ConnectedPrinter(
                 }
                 refreshing = false
                 delay(if (failure == null) 2_000L else 8_000L)
+            }
+        }
+    }
+    LaunchedEffect(client, lifecycle, retryVersion) {
+        val printer = client ?: return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            filamentsStale = filaments?.isFresh(SystemClock.elapsedRealtime()) == false
+            while (isActive) {
+                when (val result = printer.readU1FilamentSnapshot()) {
+                    is U1FilamentResult.Received -> {
+                        filaments = result.snapshot
+                        filamentsStale = false
+                    }
+                    is U1FilamentResult.Unavailable -> filamentsStale = true
+                }
+                delay(5_000)
             }
         }
     }
@@ -229,6 +253,56 @@ private fun ConnectedPrinter(
     reading?.let { JobStatusCard(it.snapshot, staleAt) }
     CameraCard(client, online, cameraMaxWidth, connection.endpoint, configurationVersion)
     reading?.let { TemperaturesCard(it.snapshot, staleAt) }
+    filaments?.let { LoadedFilamentsCard(it, filamentsStale || !it.isFresh(SystemClock.elapsedRealtime())) }
+}
+
+@Composable
+private fun LoadedFilamentsCard(snapshot: U1FilamentSnapshot, stale: Boolean) {
+    DashboardCard {
+        Text(
+            stringResource(R.string.experimental_printer_filaments),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.testTag("experimental-printer-filaments"),
+        )
+        Text(
+            stringResource(
+                if (stale) R.string.experimental_printer_filaments_stale else R.string.experimental_printer_filaments_received,
+                timeOfDay(snapshot.receivedAtMillis),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        snapshot.slots.forEach { slot ->
+            val swatch = slot.color?.takeIf { slot.present == true }
+            val swatchDescription = swatch?.let { stringResource(R.string.experimental_printer_filament_color, it) }
+            val details = listOfNotNull(slot.vendor, slot.material, slot.subtype).joinToString(" · ")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(24.dp)
+                        .background(
+                            if (swatch == null) MaterialTheme.colorScheme.surfaceVariant
+                            else Color(android.graphics.Color.parseColor(swatch)),
+                            CircleShape,
+                        )
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                        .semantics { swatchDescription?.let { contentDescription = it } },
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.experimental_printer_filament_slot, slot.physicalSlot))
+                    if (slot.present == true && details.isNotEmpty()) {
+                        Text(details, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Text(
+                    stringResource(when (slot.present) {
+                        true -> R.string.experimental_printer_filament_loaded
+                        false -> R.string.experimental_printer_filament_empty
+                        null -> R.string.experimental_printer_filament_unknown
+                    }),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
 }
 
 @Composable

@@ -2,6 +2,7 @@ package com.u1.slicer.presets
 
 import android.app.Application
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.annotation.MainThread
 import androidx.annotation.StringRes
@@ -13,8 +14,10 @@ import com.u1.slicer.data.ModelFileNaming
 import com.u1.slicer.data.SliceConfig
 import com.u1.slicer.data.SliceResult
 import com.u1.slicer.library.publicDownloadUrl
+import com.u1.slicer.network.U1FilamentResult
 import com.u1.slicer.presets.preview.FullPresetPreview
 import com.u1.slicer.presets.preview.FullPresetPreviewLoader
+import com.u1.slicer.ui.printer.experimental.ExperimentalPrinterConnection
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -47,7 +50,12 @@ internal data class FullPresetSelection(
     )
 }
 
-internal data class FullPresetModel(val name: String, val file: File, val sourceUrl: String? = null)
+internal data class FullPresetModel(
+    val name: String,
+    val file: File,
+    val sourceUrl: String? = null,
+    val filaments: FullPresetModelFilaments? = null,
+)
 
 internal data class FullPresetOutput(val filename: String, val result: SliceResult)
 
@@ -68,6 +76,9 @@ internal data class FullPresetUiState(
     val selection: FullPresetSelection? = null,
     val model: FullPresetModel? = null,
     val preview: FullPresetPreview = FullPresetPreview.Empty,
+    val printerFilaments: FullPresetPrinterFilaments = FullPresetPrinterFilaments.Unchecked,
+    val refreshingPrinterFilaments: Boolean = false,
+    val filamentMapping: FullPresetAppliedFilamentMapping? = null,
     val output: FullPresetOutput? = null,
     val operation: FullPresetOperation? = null,
     val progress: Int? = null,
@@ -80,6 +91,7 @@ internal data class FullPresetUiState(
 internal class FullPresetViewModel(application: Application) : AndroidViewModel(application) {
     private val resolver = application.contentResolver
     private val store by lazy { FullPresetStore(File(application.noBackupFilesDir, "full-presets")) }
+    private val printerConnection by lazy { ExperimentalPrinterConnection(application) }
     private val sessionDir by lazy { File(application.cacheDir, "full-presets/${UUID.randomUUID()}") }
     private val mutableState = MutableStateFlow(FullPresetUiState())
     val state = mutableState.asStateFlow()
@@ -106,7 +118,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                 bundle to store.list()
             }
             mutableState.update {
-                it.copy(bundles = bundles, bundleId = imported.id, selection = FullPresetSelection(imported))
+                it.copy(bundles = bundles, bundleId = imported.id, selection = FullPresetSelection(imported), filamentMapping = null)
             }
         }
     }
@@ -118,6 +130,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         mutableState.value = snapshot.copy(
             bundleId = id,
             selection = FullPresetSelection(bundle),
+            filamentMapping = null,
             output = null,
             error = null,
             status = null,
@@ -150,8 +163,75 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         if (snapshot.operation != null) return
         val updated = transform(selection)
         if (updated != selection) {
-            mutableState.value = snapshot.copy(selection = updated, output = null, error = null, status = null)
+            mutableState.value = snapshot.copy(selection = updated, filamentMapping = null, output = null, error = null, status = null)
         }
+    }
+
+    fun refreshPrinterFilaments() {
+        val snapshot = state.value
+        if (snapshot.operation != null || snapshot.refreshingPrinterFilaments) return
+        mutableState.value = snapshot.copy(refreshingPrinterFilaments = true)
+        viewModelScope.launch {
+            val report = withContext(Dispatchers.IO) { readPrinterFilaments() }
+            mutableState.update { state ->
+                if (state.printerFilaments != snapshot.printerFilaments) {
+                    return@update state.copy(refreshingPrinterFilaments = false)
+                }
+                val displayed = if (report is FullPresetPrinterFilaments.Unavailable) {
+                    report.copy(lastReady = state.printerFilaments.displayedReport)
+                } else report
+                state.copy(printerFilaments = displayed, refreshingPrinterFilaments = false)
+            }
+        }
+    }
+
+    fun applyPrinterFilamentMapping(targets: Map<Int, Int>, physicalPresets: List<String>) {
+        val before = state.value
+        if (before.operation != null || before.refreshingPrinterFilaments ||
+            physicalPresets.size != fullPresetPhysicalSlots.count()) return
+        val manifestMapping = before.model?.filaments?.positionalMapping(targets) ?: return
+        val reported = before.printerFilaments as? FullPresetPrinterFilaments.Ready ?: return
+        if (!reported.hasLoadedTargets(targets.values)) return
+        val availablePresets = before.bundle?.catalog?.filter { it.isSelectable && it.category == FullPresetStore.Category.FILAMENT }
+            ?.map(FullPresetStore.Preset::path).orEmpty()
+        if (physicalPresets.any { it !in availablePresets }) return
+        val mapping = FullPresetAppliedFilamentMapping(targets.toMap(), manifestMapping, physicalPresets.toList(), reported)
+        viewModelScope.launch {
+            val current = withContext(Dispatchers.IO) { printerConnection.isCurrent(reported.connection) }
+            mutableState.update { state ->
+                if (state.operation != null || state.refreshingPrinterFilaments || state.model != before.model || state.bundleId != before.bundleId ||
+                    state.selection != before.selection || state.printerFilaments != reported || state.filamentMapping != before.filamentMapping
+                ) state
+                else if (!current || !reported.snapshot.isFresh(SystemClock.elapsedRealtime())) {
+                    state.copy(printerFilaments = FullPresetPrinterFilaments.Unavailable(reported))
+                } else {
+                    state.copy(filamentMapping = mapping, output = null, error = null, status = null)
+                }
+            }
+        }
+    }
+
+    fun useManualFilaments() {
+        mutableState.update { state ->
+            if (state.operation != null || state.filamentMapping == null) state
+            else state.copy(filamentMapping = null, output = null, error = null, status = null)
+        }
+    }
+
+    private suspend fun readPrinterFilaments(): FullPresetPrinterFilaments = try {
+        val connection = printerConnection.load()
+        if (connection.endpoint.isBlank()) {
+            FullPresetPrinterFilaments.NoConnection
+        } else {
+            val result = printerConnection.clientIfCurrent(connection)?.readU1FilamentSnapshot()
+            if (result is U1FilamentResult.Received && printerConnection.isCurrent(connection)) {
+                FullPresetPrinterFilaments.Ready(connection, result.snapshot)
+            } else FullPresetPrinterFilaments.Unavailable()
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        FullPresetPrinterFilaments.Unavailable()
     }
 
     fun importModel(uri: Uri) {
@@ -180,14 +260,14 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                     val imported = copy()
                     var complete = false
                     try {
-                        val preview = FullPresetPreviewLoader.load(imported.file)
+                        val loaded = FullPresetPreviewLoader.load(imported.file)
                         complete = true
-                        imported to preview
+                        imported.copy(filaments = loaded.filaments) to loaded.preview
                     } finally {
                         if (!complete) imported.file.parentFile?.deleteRecursively()
                     }
                 }
-                mutableState.update { it.copy(model = model, preview = preview) }
+                mutableState.update { it.copy(model = model, preview = preview, filamentMapping = null) }
                 withContext(Dispatchers.IO) { previous.model?.file?.parentFile?.deleteRecursively() }
             } catch (error: FullPresetPreviewLoader.InvalidModel) {
                 throw WorkflowFailure(error.reason)
@@ -203,25 +283,52 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         val bundle = snapshot.bundle ?: return
         val selection = snapshot.selection ?: return
         val model = snapshot.model ?: return
+        val mapping = snapshot.filamentMapping
         runOperation(FullPresetOperation.SLICING, R.string.full_presets_slice_failed) {
             val cancellation = SliceCancellation()
             sliceCancellation = cancellation
             try {
                 val result = withContext(Dispatchers.IO) {
+                    val fresh = if (mapping == null) null else {
+                        val report = readPrinterFilaments()
+                        mutableState.update { state ->
+                            val displayed = if (report is FullPresetPrinterFilaments.Unavailable) {
+                                report.copy(lastReady = state.printerFilaments.displayedReport)
+                            } else report
+                            state.copy(printerFilaments = displayed)
+                        }
+                        if (cancellation.requested) return@withContext null
+                        if (report !is FullPresetPrinterFilaments.Ready || !mapping.matches(report)) {
+                            throw WorkflowFailure(R.string.full_presets_mapping_recheck)
+                        }
+                        report
+                    }
                     // Competing activity instances can select the same bundle. Hold the lock from writing
                     // the shared manifest through loading it, so each slice uses its own selection.
                     NativeLibrary.previewMutex.withLock {
                         if (cancellation.requested) return@withLock null
-                        val manifest = store.writeSelection(bundle.id, selection.printer, selection.process, selection.filaments)
-                        val catalog = bundle.catalog.associateBy { it.path }
-                        val savedSelection = bundle.copy(
-                            manifest = manifest,
-                            printer = catalog.getValue(selection.printer),
-                            process = catalog.getValue(selection.process),
-                            filaments = selection.filaments.map(catalog::getValue),
+                        if (fresh != null && (!fresh.snapshot.isFresh(SystemClock.elapsedRealtime()) ||
+                                !printerConnection.isCurrent(fresh.connection))) {
+                            throw WorkflowFailure(R.string.full_presets_mapping_recheck)
+                        }
+                        val manifest = store.writeSelection(
+                            bundle.id,
+                            selection.printer,
+                            selection.process,
+                            mapping?.physicalPresets ?: selection.filaments,
+                            mapping?.positionalMapping,
                         )
-                        mutableState.update {
-                            it.copy(bundles = it.bundles.map { entry -> if (entry.id == bundle.id) savedSelection else entry })
+                        if (mapping == null) {
+                            val catalog = bundle.catalog.associateBy { it.path }
+                            val savedSelection = bundle.copy(
+                                manifest = manifest,
+                                printer = catalog.getValue(selection.printer),
+                                process = catalog.getValue(selection.process),
+                                filaments = selection.filaments.map(catalog::getValue),
+                            )
+                            mutableState.update {
+                                it.copy(bundles = it.bundles.map { entry -> if (entry.id == bundle.id) savedSelection else entry })
+                            }
                         }
                         runNativeSlice(manifest, model, cancellation)
                     }

@@ -51,6 +51,7 @@ PRESET_TESTS = ",".join(
         "fullPresetRejectsProjectInput", "wrongTypeTraversalAndCycleFailClosed",
         "geometryOnlyProjectUsesPresetsAndPreservesSource",
         "geometryOnlyPreservesColorPaintWithSelectedSlots",
+        "geometryOnlyMapsPaintAndBaseToPhysicalTools", "invalidModelFilamentMappingsFailClosed",
         "geometryOnlyRejectsUnsupportedPaintAndModifierVolumes",
         "geometryOnlyCentersStlOnSelectedBedWithoutMovingSource",
     )

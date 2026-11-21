@@ -78,8 +78,8 @@ test "$(wc -l < "$work/output/reference-jni-symbols.txt")" -eq 60
 diff -u "$work/output/reference-jni-symbols.txt" "$work/output/jni-symbols.txt"
 "$tools/llvm-readelf" -p .comment "$output" | grep -F 'clang version 17.0.2'
 echo "Engine size: $(stat -c %s "$output") bytes (diagnostic only)"
-grep -aqF 'orca-native-presets-v2' "$output"
-printf '%s\n' 'orca-native-presets-v2' > "$work/output/full-preset-schema.txt"
+grep -aqF 'orca-native-presets-v3' "$output"
+printf '%s\n' 'orca-native-presets-v3' > "$work/output/full-preset-schema.txt"
 printf '%s\n' 'c++_static' > "$work/output/cxx-runtime.txt"
 sha256sum "$output" "$work/output/cxx-runtime.txt" "$work/output/full-preset-schema.txt" > "$work/output/sha256.txt"
 echo "Experimental $abi engine built from $gitlink; hardware slicing has not been verified."

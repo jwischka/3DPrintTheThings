@@ -1,5 +1,6 @@
 package com.u1.slicer.network
 
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -296,6 +297,22 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
                 } else {
                     MoonrakerStatusResult.Received(snapshot)
                 }
+            }
+        }
+    }
+
+    /** Read the physical U1 slot fields without changing generic status monitoring. */
+    internal suspend fun readU1FilamentSnapshot(): U1FilamentResult {
+        val (readClient, endpoint) = synchronized(authLock) { client to baseUrl }
+        if (endpoint.isBlank()) return U1FilamentResult.Unavailable(MoonrakerJsonRead.Problem.INVALID_URL)
+        val path = "$endpoint/printer/objects/query?${U1FilamentSnapshot.OBJECT_QUERY}"
+        return when (val reply = MoonrakerJsonRead(readClient).get(path)) {
+            is MoonrakerJsonRead.Reply.Failure -> U1FilamentResult.Unavailable(reply.problem, reply.statusCode)
+            is MoonrakerJsonRead.Reply.Success -> {
+                val status = reply.json.optJSONObject("result")?.optJSONObject("status")
+                    ?: return U1FilamentResult.Unavailable(MoonrakerJsonRead.Problem.MALFORMED)
+                val snapshot = U1FilamentSnapshot.parse(status, System.currentTimeMillis(), SystemClock.elapsedRealtime())
+                if (snapshot == null) U1FilamentResult.Unavailable() else U1FilamentResult.Received(snapshot)
             }
         }
     }

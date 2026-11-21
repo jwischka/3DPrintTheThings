@@ -10,6 +10,7 @@ struct FullPresetResult {
     Slic3r::DynamicPrintConfig config;
     size_t filament_count = 0;
     std::vector<std::string> resolved_inputs;
+    std::vector<int> model_filament_mapping;
     bool geometry_only = false;
 };
 // Throws on invalid or unsupported input; no caller state is modified.

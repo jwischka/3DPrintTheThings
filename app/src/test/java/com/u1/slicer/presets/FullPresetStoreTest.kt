@@ -64,6 +64,34 @@ class FullPresetStoreTest {
     }
 
     @Test
+    fun mappedSelectionUsesPhysicalPresetOrderWithoutChangingManualSelection() {
+        val imported = store.importZip(archive(files()).inputStream())
+        val printer = imported.printer.path
+        val process = imported.process.path
+        val pla = imported.filaments[0].path
+        val petg = "filament/petg.json"
+        val manual = store.writeSelection(imported.id, printer, process, listOf(pla))
+        val physical = listOf(petg, pla, petg, pla)
+        val manualBytes = manual.readBytes()
+
+        val mapped = store.writeSelection(imported.id, printer, process, physical, listOf(3, 2, 3))
+        val manifest = JSONObject(mapped.readText())
+        assertEquals("orca-native-presets-v3", manifest.getString("schema"))
+        assertEquals("geometry-only", manifest.getString("project_settings"))
+        assertEquals(JSONArray(physical).toString(), manifest.getJSONArray("filaments").toString())
+        assertEquals("[3,2,3]", manifest.getJSONArray("model_filament_mapping").toString())
+        assertEquals(manual, store.get(imported.id)?.manifest)
+        assertArrayEquals(manualBytes, manual.readBytes())
+
+        val mappedBytes = mapped.readBytes()
+        for (invalid in listOf(emptyList(), listOf(0), listOf(5), List(5) { 1 })) {
+            assertThrows(IOException::class.java) { store.writeSelection(imported.id, printer, process, physical, invalid) }
+        }
+        assertThrows(IOException::class.java) { store.writeSelection(imported.id, printer, process, physical.drop(1), listOf(2)) }
+        assertArrayEquals(mappedBytes, mapped.readBytes())
+    }
+
+    @Test
     fun rejectsTraversalDuplicatesAndUnlistedFiles() {
         for (path in listOf("../outside.json", "filament/../outside.json", "/outside.json", "C:/outside.json", "filament\\outside.json", "FILAMENT/PLA.JSON", "unlisted.json", ".selection.json")) {
             val invalid = files().apply { put(path, preset("Spare", "filament")) }

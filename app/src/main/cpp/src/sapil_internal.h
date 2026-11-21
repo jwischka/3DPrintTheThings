@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace sapil {
 
@@ -15,6 +16,7 @@ struct SlicerEngine::Impl {
     PresetState preset_state = PresetState::Legacy;
     Slic3r::DynamicPrintConfig full_preset_config;
     size_t full_preset_filament_count = 0;
+    std::vector<int> full_preset_model_filament_mapping;
     std::string last_gcode_path;
     std::string last_gcode_content;
     Slic3r::DynamicPrintConfig print_config;

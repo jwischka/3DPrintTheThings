@@ -380,14 +380,20 @@ private fun PrintSetupCard(state: FullPresetUiState, onOpen: () -> Unit, compact
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                val filament = when (slots.size) {
+                val mapping = state.filamentMapping
+                val filaments = if (mapping != null) {
+                    mapping.targets.toSortedMap().map { (source, target) ->
+                        val path = mapping.physicalPresets[target - 1]
+                        stringResource(R.string.full_presets_mapping_summary, source, target, names[path] ?: path)
+                    }
+                } else listOfNotNull(when (slots.size) {
                     0 -> null
                     1 -> names[slots.single()]
                     else -> pluralStringResource(R.plurals.full_presets_slot_count, slots.size, slots.size)
-                }
-                filament?.let {
+                })
+                for (filament in filaments) {
                     Text(
-                        it,
+                        filament,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,

@@ -136,8 +136,8 @@ def verifyFullPresetEngine = tasks.register('verifyFullPresetEngine') {
         def receipt = new File(engine, 'sha256.txt')
         if (!receipt.isFile()) throw new GradleException('Experimental engine sha256.txt is missing.')
         def capability = new File(engine, 'full-preset-schema.txt')
-        if (!capability.isFile() || capability.text.trim() != 'orca-native-presets-v2') {
-            throw new GradleException('Experimental builds require an engine built with geometry-only v2 preset support.')
+        if (!capability.isFile() || capability.text.trim() != 'orca-native-presets-v3') {
+            throw new GradleException('Experimental builds require an engine built with v3 model filament mapping support.')
         }
         def runtime = new File(engine, 'cxx-runtime.txt')
         if (!runtime.isFile() || runtime.text.trim() != 'c++_static' || new File(engine, 'libc++_shared.so').exists()) {

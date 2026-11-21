@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 // Slicer includes
@@ -23,6 +24,7 @@
 #include "libslic3r/GCode.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/TriangleSelector.hpp"
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Exception.hpp"
@@ -184,22 +186,40 @@ static std::string buildNativeModelSnapshot(const Slic3r::Model& model)
     return out.str();
 }
 
-static void keep_filament_assignment(Slic3r::ModelConfig& config, size_t filament_count)
+static int read_filament_assignment(const Slic3r::ModelConfig& config, std::size_t filament_count)
 {
     const auto* extruder = config.option("extruder");
     const int tool = extruder ? extruder->getInt() : 0;
-    if (tool < 0 || static_cast<size_t>(tool) > filament_count)
+    if (tool < 0 || static_cast<std::size_t>(tool) > filament_count)
         throw std::runtime_error("Model references an unavailable filament");
+    return tool;
+}
+
+static int keep_filament_assignment(Slic3r::ModelConfig& config, std::size_t source_filament_count,
+                                    const std::vector<int>& mapping, int inherited_tool = 0)
+{
+    const int source_tool = read_filament_assignment(config, source_filament_count);
+    int tool = inherited_tool;
+    if (source_tool != 0)
+        tool = mapping.empty() ? source_tool : mapping[static_cast<std::size_t>(source_tool - 1)];
     config.reset();
     if (tool != 0)
         config.set("extruder", tool);
+    return tool;
 }
 
-static bool geometry_only_input_is_stl(const Slic3r::Model& model, std::size_t filament_count)
+static bool geometry_only_input_is_stl(const Slic3r::Model& model, std::size_t source_filament_count,
+                                       bool has_mapping)
 {
     constexpr std::size_t color_paint_slot_count = 4;
     bool only_stl = true;
+    if (has_mapping) {
+        for (const auto& material : model.materials)
+            read_filament_assignment(material.second->config, source_filament_count);
+    }
     for (const auto* object : model.objects) {
+        if (has_mapping)
+            read_filament_assignment(object->config, source_filament_count);
         std::string path = object->input_file;
         std::transform(path.begin(), path.end(), path.begin(),
             [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -209,17 +229,18 @@ static bool geometry_only_input_is_stl(const Slic3r::Model& model, std::size_t f
             throw std::runtime_error("Geometry-only presets require STL or 3MF input");
         // Check before copying because the pinned ModelVolume copy omits exterior facets.
         for (const auto* volume : object->volumes) {
+            if (has_mapping)
+                read_filament_assignment(volume->config, source_filament_count);
             if (!volume->is_model_part())
                 throw std::runtime_error("Geometry-only presets do not support modifier or negative volumes");
             if (volume->is_fdm_support_painted() || volume->is_seam_painted() || volume->is_fuzzy_skin_painted() ||
                 !volume->exterior_facets.empty())
                 throw std::runtime_error("Geometry-only presets do not support painted supports, seams, fuzzy skin or exterior facets");
-            // The core can fold higher paint states onto physical U1 tools. Use
-            // only its zero-based physical tool indices with selected presets.
+            // Reject higher source states before the core can fold them onto physical tools.
             for (std::size_t tool : volume->get_extruders_from_multi_material_painting()) {
                 if (tool >= color_paint_slot_count)
                     throw std::runtime_error("Geometry-only presets support color paint on filament slots 1 through 4");
-                if (tool >= filament_count)
+                if (tool >= source_filament_count)
                     throw std::runtime_error("Color paint references an unavailable filament");
             }
         }
@@ -227,20 +248,30 @@ static bool geometry_only_input_is_stl(const Slic3r::Model& model, std::size_t f
     return only_stl;
 }
 
-static void prepare_geometry_only_model(Slic3r::Model& model, size_t filament_count)
+static void prepare_geometry_only_model(Slic3r::Model& model, std::size_t source_filament_count,
+                                        const std::vector<int>& mapping)
 {
+    const bool has_mapping = !mapping.empty();
+    Slic3r::EnforcerBlockerStateMap facet_mapping{};
+    for (std::size_t slot = 0; slot < mapping.size(); ++slot)
+        facet_mapping[slot + 1] = static_cast<Slic3r::EnforcerBlockerType>(mapping[slot]);
     model.plates_custom_gcodes.clear();
     model.curr_plate_index = 0;
     model.calib_pa_pattern.reset();
     for (const auto& material : model.materials)
-        keep_filament_assignment(material.second->config, filament_count);
+        keep_filament_assignment(material.second->config, source_filament_count, mapping);
     for (auto* object : model.objects) {
-        keep_filament_assignment(object->config, filament_count);
+        const int object_tool = keep_filament_assignment(object->config, source_filament_count, mapping,
+                                                         has_mapping ? mapping.front() : 0);
         object->layer_config_ranges.clear();
         object->layer_height_profile.clear();
         object->brim_points.clear();
-        for (auto* volume : object->volumes)
-            keep_filament_assignment(volume->config, filament_count);
+        for (auto* volume : object->volumes) {
+            keep_filament_assignment(volume->config, source_filament_count, mapping, has_mapping ? object_tool : 0);
+            if (has_mapping && volume->is_mm_painted())
+                volume->mmu_segmentation_facets.remap_enforcer_block_types(
+                    *volume, Slic3r::EnforcerBlockerType::Extruder4, facet_mapping);
+        }
     }
 }
 
@@ -1066,6 +1097,7 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         bool full_profile = false;
         bool geometry_only = false;
         size_t full_preset_filament_count = 0;
+        std::vector<int> model_filament_mapping;
         Slic3r::DynamicPrintConfig dpc;
         {
             std::lock_guard<std::mutex> lock(pImpl->preset_mutex);
@@ -1076,6 +1108,7 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
             if (full_profile) {
                 dpc = pImpl->full_preset_config;
                 full_preset_filament_count = pImpl->full_preset_filament_count;
+                model_filament_mapping = pImpl->full_preset_model_filament_mapping;
             }
         }
         if (full_profile && !geometry_only && !getModelConfig().empty())
@@ -1644,9 +1677,12 @@ SliceResult SlicerEngine::slice(const SliceConfig& config, ProgressCallback prog
         std::optional<Slic3r::Model> geometry_model;
         bool center_stl = false;
         if (geometry_only) {
-            center_stl = geometry_only_input_is_stl(source_model, full_preset_filament_count);
+            const bool has_mapping = !model_filament_mapping.empty();
+            const std::size_t source_filament_count = has_mapping ?
+                model_filament_mapping.size() : full_preset_filament_count;
+            center_stl = geometry_only_input_is_stl(source_model, source_filament_count, has_mapping);
             geometry_model.emplace(source_model);
-            prepare_geometry_only_model(*geometry_model, full_preset_filament_count);
+            prepare_geometry_only_model(*geometry_model, source_filament_count, model_filament_mapping);
             prepare_geometry_only_palette(dpc, full_preset_filament_count);
         }
         Slic3r::Model& model = geometry_model ? *geometry_model : source_model;
@@ -1991,6 +2027,7 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
     if (ini_path.empty()) {
         pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
         pImpl->full_preset_filament_count = 0;
+        pImpl->full_preset_model_filament_mapping.clear();
         pImpl->preset_state = Impl::PresetState::Legacy;
         return true;
     }
@@ -1998,13 +2035,16 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
         pImpl->preset_state = Impl::PresetState::Invalid;
         pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
         pImpl->full_preset_filament_count = 0;
+        pImpl->full_preset_model_filament_mapping.clear();
         try {
             auto loaded = load_full_presets(ini_path);
             pImpl->full_preset_config = std::move(loaded.config);
             pImpl->full_preset_filament_count = loaded.filament_count;
+            pImpl->full_preset_model_filament_mapping = std::move(loaded.model_filament_mapping);
             pImpl->preset_state = loaded.geometry_only ? Impl::PresetState::GeometryOnly : Impl::PresetState::Ready;
             const nlohmann::json event = {
-                {"schema", loaded.geometry_only ? "orca-native-presets-v2" : "orca-native-presets-v1"},
+                {"schema", !pImpl->full_preset_model_filament_mapping.empty() ? "orca-native-presets-v3" :
+                    loaded.geometry_only ? "orca-native-presets-v2" : "orca-native-presets-v1"},
                 {"resolvedInputs", loaded.resolved_inputs},
                 {"filamentCount", loaded.filament_count},
                 {"configKeyCount", pImpl->full_preset_config.keys().size()}
@@ -2023,12 +2063,13 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
                                       "Selected preset is not instantiable", "Unsupported preset extruder topology",
                                       "Only FFF printer presets are supported", "Invalid nozzle diameter",
                                       "Preset references an unavailable filament", "System filament has no filament identity",
-                                      "Invalid full preset configuration"}) {
+                                      "Invalid full preset configuration", "Invalid model filament mapping"}) {
                 if (reason == known) { category = known; break; }
             }
             SAPIL_LOGE("Full preset load failed: %s", category);
             pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
             pImpl->full_preset_filament_count = 0;
+            pImpl->full_preset_model_filament_mapping.clear();
             pImpl->preset_state = Impl::PresetState::Invalid;
             return false;
         }
@@ -2036,6 +2077,7 @@ bool SlicerEngine::loadProfile(const std::string& ini_path) {
     if (pImpl->preset_state != Impl::PresetState::Legacy) {
         pImpl->full_preset_config = Slic3r::DynamicPrintConfig();
         pImpl->full_preset_filament_count = 0;
+        pImpl->full_preset_model_filament_mapping.clear();
         pImpl->preset_state = Impl::PresetState::Invalid;
         return false;
     }

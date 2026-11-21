@@ -8,6 +8,7 @@ import java.io.IOException
 internal data class PrinterConnection(
     val endpoint: String = "",
     val hasApiKey: Boolean = false,
+    val revision: Long = 0,
 )
 
 /** Kept separate from the installed printer list and the slicer application container. */
@@ -15,13 +16,12 @@ internal class ExperimentalPrinterConnection(context: Context) {
     private val prefs = context.getSharedPreferences("experimental-printer", Context.MODE_PRIVATE)
     private val credentials = MoonrakerApiKeyStore(context.noBackupFilesDir)
 
-    fun load(): PrinterConnection {
+    fun load(): PrinterConnection = synchronized(connectionLock) {
         val endpoint = prefs.getString(ENDPOINT, null).orEmpty()
-        return PrinterConnection(endpoint, credentials.get(PRINTER_ID, endpoint) != null)
+        PrinterConnection(endpoint, credentials.get(PRINTER_ID, endpoint) != null, connectionRevision)
     }
 
-    @Synchronized
-    fun save(endpoint: String, apiKey: String, clearApiKey: Boolean): PrinterConnection {
+    fun save(endpoint: String, apiKey: String, clearApiKey: Boolean): PrinterConnection = synchronized(connectionLock) {
         val validated = validateEndpoint(endpoint)
         require(validated.isNotEmpty() && validKey(apiKey))
         val previous = load()
@@ -40,20 +40,29 @@ internal class ExperimentalPrinterConnection(context: Context) {
         } finally {
             if (changed && !saved) writeEndpoint(previous.endpoint)
         }
-        return load()
+        if (changed || apiKey.isNotBlank() || clearApiKey) connectionRevision++
+        load()
     }
 
     private fun writeEndpoint(endpoint: String): Boolean =
         prefs.edit().putString(ENDPOINT, endpoint.takeIf(String::isNotEmpty)).commit()
 
-    fun client(connection: PrinterConnection): MoonrakerClient = MoonrakerClient().apply {
-        baseUrl = connection.endpoint
-        configureApiKey(credentials.get(PRINTER_ID, connection.endpoint))
+    fun isCurrent(connection: PrinterConnection): Boolean = load() == connection
+
+    fun clientIfCurrent(connection: PrinterConnection): MoonrakerClient? = synchronized(connectionLock) {
+        if (!isCurrent(connection)) return@synchronized null
+        MoonrakerClient().apply {
+            baseUrl = connection.endpoint
+            configureApiKey(credentials.get(PRINTER_ID, connection.endpoint))
+        }
     }
 
     companion object {
         private const val ENDPOINT = "endpoint"
         private const val PRINTER_ID = "experimental-printer-dashboard"
+        private val connectionLock = Any()
+        // Prepare and Printer may hold distinct instances in the same app process.
+        private var connectionRevision = 0L
 
         fun validateEndpoint(input: String): String =
             MoonrakerClient.normalizeUrl(input).takeIf { it.length <= 4096 }.orEmpty()
