@@ -39,7 +39,8 @@ PRESET_UI_TEST = (
     "com.u1.slicer.FullPresetPrinterInstrumentedTest#showsPrinterProgressCameraAndConnectionFailures,"
     "com.u1.slicer.FullPresetPrinterInstrumentedTest#switchingConnectionIgnoresLateResponsesAndLeavingStopsPolling,"
     "com.u1.slicer.FullPresetLayoutInstrumentedTest#landscapeKeepsPreviewAndActionsReachableAtLargeText,"
-    "com.u1.slicer.FullPresetPrinterLayoutInstrumentedTest#connectionEditorScrollsAboveKeyboardInLandscapeAtLargeText"
+    "com.u1.slicer.FullPresetPrinterLayoutInstrumentedTest#connectionEditorScrollsAboveKeyboardInLandscapeAtLargeText,"
+    "com.u1.slicer.FullPresetCatalogInstrumentedTest#browseDownloadPreviewSliceExportAndReopenArchive"
 )
 PRESET_TESTS = ",".join(
     "com.u1.slicer.slicing.NativePresetInstrumentedTest#" + method

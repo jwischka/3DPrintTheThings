@@ -11,6 +11,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,6 +35,12 @@ data class DownloadProvenance(
     val license: String? = null,
     val thumbnailUrl: String? = null,
 )
+
+internal fun publicDownloadUrl(url: String): HttpUrl {
+    val parsed = url.toHttpUrlOrNull() ?: throw IllegalArgumentException("Invalid provenance URL")
+    if (parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) throw IllegalArgumentException("Credential in URL")
+    return parsed.newBuilder().query(null).fragment(null).build()
+}
 
 data class DownloadEntry(
     val sha256: String,
@@ -395,15 +402,10 @@ class DownloadStore(
         return if (base.length <= 128) base else base.dropLast(extension.length).take(128 - extension.length) + extension
     }
 
-    private fun publicUrl(url: String): String {
-        val parsed = url.toHttpUrlOrNull() ?: throw IllegalArgumentException("Invalid provenance URL")
-        if (parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) throw IllegalArgumentException("Credential in URL")
-        return parsed.newBuilder().query(null).fragment(null).build().toString()
-    }
-
     private fun normalizeProvenance(provenance: DownloadProvenance): DownloadProvenance = provenance.copy(
-        pageUrl = if (provenance.site == "local" && provenance.pageUrl.isEmpty()) "" else publicUrl(provenance.pageUrl),
-        thumbnailUrl = provenance.thumbnailUrl?.let(::publicUrl),
+        pageUrl = if (provenance.site == "local" && provenance.pageUrl.isEmpty()) ""
+            else publicDownloadUrl(provenance.pageUrl).toString(),
+        thumbnailUrl = provenance.thumbnailUrl?.let { publicDownloadUrl(it).toString() },
     )
 
     private fun looksLikeHtml(bytes: ByteArray, count: Int): Boolean {

@@ -24,6 +24,14 @@ from the preview bounds; slice time and material estimates come from the native
 result and remain absent when unavailable. Android's document picker handles
 preset import, model import, and G-code export.
 
+Browse and Library share the workspace navigation. Downloaded models and files
+selected from archives enter the same bounded copy and preview pipeline as
+document imports. The active session owns its model copy independently of the
+durable library, and retains a sanitized source link. Catalog services never
+initialize a second native scene or the legacy slicing container. See
+[model browsing and downloads](model-browsing.md) for transfer ownership and
+navigation behavior.
+
 Preset import accepts a ZIP containing `manifest.json` at its root and exactly
 the referenced JSON files. Archive and expanded sizes, individual files, entry
 counts, paths, names, categories and inheritance are checked before an atomic

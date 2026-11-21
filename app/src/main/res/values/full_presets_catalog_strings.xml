@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_presets_browse_tab">Browse</string>
+    <string name="full_presets_library_tab">Library</string>
+    <string name="full_presets_catalog_downloading">Downloading %1$s…</string>
+    <string name="full_presets_catalog_extracting">Extracting %1$s…</string>
+    <string name="full_presets_catalog_cancelling">Cancelling…</string>
+    <string name="full_presets_catalog_saved">Saved %1$s to Library</string>
+    <string name="full_presets_catalog_download_failed">Could not save this download. Check the connection and try again.</string>
+    <string name="full_presets_catalog_timeout">The transfer timed out. Try again.</string>
+    <string name="full_presets_catalog_workspace_busy">Wait for the current Prepare operation before opening a model.</string>
+    <string name="full_presets_catalog_dismiss">Dismiss</string>
+    <string name="full_presets_catalog_search_website">Search on website</string>
+</resources>

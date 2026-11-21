@@ -16,6 +16,24 @@ Direct off-site downloads are intercepted only for HTTPS URLs whose path ends in
 
 The browser is a site interface, not a slicer backend. Android UI/instrumentation CI builds the browser app independently; that APK does not include or validate the normal native slicer APK, JNI integration, slicing, or printer communication. WebView behavior also depends on the Android System WebView implementation.
 
+## Experimental workspace integration
+
+The full-preset app exposes Browse and Library alongside Prepare and Printer.
+It constructs its catalog services without initializing the legacy slicer
+container. A catalog ViewModel owns downloads and archive extraction across
+activity rotation; blob callbacks transfer ownership of their temporary file
+before the browser deletes its original path. Transfer cancellation waits for
+cleanup, and failures leave the existing Prepare model intact.
+
+A completed transfer can open automatically only in its originating navigation
+context while Prepare is idle. Otherwise the saved file remains available for
+an explicit Open action. Library files are copied into the bounded Prepare
+session before preview extraction or slicing, preserving the saved source.
+The model name links to its public HTTPS source without credentials, query or
+fragment. Separate native instrumentation exercises catalog search, download,
+Library and ZIP selection, rendered preview, full-preset slicing and exact-byte
+export in the same experimental app.
+
 ## Implementation references
 
 - [BrowseScreen](../../app/src/main/java/com/u1/slicer/browse/BrowseScreen.kt), [PrintablesClient](../../app/src/main/java/com/u1/slicer/browse/printables/PrintablesClient.kt), [ModelSite](../../app/src/main/java/com/u1/slicer/browse/ModelSite.kt)

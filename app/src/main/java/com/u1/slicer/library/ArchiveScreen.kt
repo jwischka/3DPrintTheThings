@@ -43,7 +43,14 @@ import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ArchiveScreen(store: DownloadStore, hash: String, onOpen: (File, String) -> Unit, onBack: () -> Unit) {
+fun ArchiveScreen(
+    store: DownloadStore,
+    hash: String,
+    onOpen: ((File, String) -> Unit)? = null,
+    onBack: () -> Unit,
+    openEnabled: Boolean = true,
+    onCandidateSelected: ((DownloadEntry, ModelArchive.Candidate) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val archiveReader = remember { ModelArchive() }
@@ -73,8 +80,13 @@ fun ArchiveScreen(store: DownloadStore, hash: String, onOpen: (File, String) -> 
                     Column(Modifier.padding(12.dp)) {
                         Text(candidate.path)
                         Text(Formatter.formatShortFileSize(context, candidate.sizeBytes))
-                        TextButton(enabled = !busy, onClick = {
+                        TextButton(enabled = !busy && openEnabled, onClick = {
                             val entry = archive ?: return@TextButton
+                            if (onCandidateSelected != null) {
+                                onCandidateSelected(entry, candidate)
+                                return@TextButton
+                            }
+                            val open = onOpen ?: return@TextButton
                             busy = true
                             failed = false
                             scope.launch {
@@ -82,7 +94,7 @@ fun ArchiveScreen(store: DownloadStore, hash: String, onOpen: (File, String) -> 
                                 try {
                                     archiveReader.extract(store.fileFor(entry), candidate, temporary)
                                     val imported = store.importFile(temporary, candidate.path.substringAfterLast('/'), entry.provenance)
-                                    onOpen(store.fileFor(imported), imported.fileName)
+                                    open(store.fileFor(imported), imported.fileName)
                                 } catch (_: IOException) { failed = true }
                                 catch (_: IllegalArgumentException) { failed = true }
                                 finally {

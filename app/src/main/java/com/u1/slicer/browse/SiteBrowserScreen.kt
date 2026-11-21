@@ -35,6 +35,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -91,9 +93,14 @@ fun SiteBrowserScreen(
     onLibrary: (() -> Unit)? = null,
     requestInterceptor: ((WebResourceRequest) -> WebResourceResponse?)? = null,
     onWebViewCreated: ((WebView) -> Unit)? = null,
+    downloadsEnabled: Boolean = true,
+    restoreLastPage: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val allowDownload by rememberUpdatedState(downloadsEnabled)
+    val downloadHandler by rememberUpdatedState(onDownload)
+    var restoredUrl by rememberSaveable(site.id, initialUrl) { mutableStateOf(initialUrl) }
     var webView by remember(site.id) { mutableStateOf<WebView?>(null) }
     var bridge by remember(site.id) { mutableStateOf<BrowserBlobBridge?>(null) }
     var currentUrl by remember(site.id) { mutableStateOf(site.startUrl) }
@@ -108,7 +115,7 @@ fun SiteBrowserScreen(
         if (!openExternalBrowser(context, url)) error = true
     }
     fun handOff(download: BrowserDownload) {
-        if (busy) {
+        if (busy || !allowDownload) {
             if (download is BrowserDownload.Local) download.tempFile.delete()
             return
         }
@@ -116,7 +123,7 @@ fun SiteBrowserScreen(
         error = false
         val job = scope.launch {
             try {
-                onDownload(download)
+                downloadHandler(download)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -297,6 +304,9 @@ fun SiteBrowserScreen(
                                 if (url != null && site.ownsPage(url)) {
                                     currentUrl = url
                                     committedPageUrl = url
+                                    if (restoreLastPage) {
+                                        restoredUrl = if (url == initialUrl) url else publicPageUrl(site, url) ?: initialUrl
+                                    }
                                 }
                             }
                         }
@@ -336,7 +346,7 @@ fun SiteBrowserScreen(
                         }
 
                         setDownloadListener { url, userAgent, disposition, _, _ ->
-                            if (busy || !site.ownsPage(committedPageUrl)) return@setDownloadListener
+                            if (busy || !allowDownload || !site.ownsPage(committedPageUrl)) return@setDownloadListener
                             if (url.startsWith("blob:", ignoreCase = true)) {
                                 blobBridge.capture(url, disposition)
                                 return@setDownloadListener
@@ -350,7 +360,8 @@ fun SiteBrowserScreen(
                             handOff(BrowserDownload.Network(url, filename, page, site.name,
                                 userAgent ?: settings.userAgentString, cookie))
                         }
-                        loadUrl(initialUrl.takeIf(site::ownsPage) ?: site.startUrl)
+                        val startUrl = if (restoreLastPage) restoredUrl else initialUrl
+                        loadUrl(startUrl.takeIf(site::ownsPage) ?: site.startUrl)
                         webView = this
                         onWebViewCreated?.invoke(this)
                     }

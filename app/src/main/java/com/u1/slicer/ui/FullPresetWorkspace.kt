@@ -4,7 +4,9 @@ import android.icu.text.MeasureFormat
 import android.icu.text.NumberFormat
 import android.icu.util.Measure
 import android.icu.util.MeasureUnit
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,16 +48,20 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.R
+import com.u1.slicer.browse.openExternalBrowser
 import com.u1.slicer.data.SliceResult
 import com.u1.slicer.presets.FullPresetOutput
 import com.u1.slicer.presets.FullPresetUiState
@@ -174,6 +180,7 @@ private fun ModelPanel(
                 }
                 ModelMetadata(
                     name = model.name,
+                    sourceUrl = model.sourceUrl,
                     mesh = (state.preview as? FullPresetPreview.Ready)?.mesh,
                     replaceEnabled = state.operation == null,
                     onReplace = onImportModel,
@@ -187,11 +194,25 @@ private fun ModelPanel(
 @Composable
 private fun ModelMetadata(
     name: String,
+    sourceUrl: String?,
     mesh: MeshData?,
     replaceEnabled: Boolean,
     onReplace: () -> Unit,
     modifier: Modifier,
 ) {
+    val sourceLinkModifier = if (sourceUrl == null) {
+        Modifier
+    } else {
+        val context = LocalContext.current
+        Modifier.testTag("full-presets-model-source").clickable(
+            onClickLabel = stringResource(R.string.full_presets_open_model_source),
+            role = Role.Button,
+        ) {
+            if (!openExternalBrowser(context, sourceUrl)) {
+                Toast.makeText(context, R.string.full_presets_model_source_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     BoxWithConstraints(
         modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
     ) {
@@ -200,7 +221,10 @@ private fun ModelMetadata(
             Column(labelModifier) {
                 Text(
                     name,
+                    modifier = sourceLinkModifier,
                     style = MaterialTheme.typography.titleSmall,
+                    color = if (sourceUrl == null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+                    textDecoration = if (sourceUrl == null) null else TextDecoration.Underline,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )

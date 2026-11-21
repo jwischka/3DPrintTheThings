@@ -1,5 +1,6 @@
 package com.u1.slicer.library
 
+import androidx.annotation.StringRes
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
@@ -70,6 +71,9 @@ fun LibraryScreen(
     onOpen: (DownloadEntry) -> Unit,
     onBack: () -> Unit,
     onRetryFromSource: ((String) -> Unit)? = null,
+    openEnabled: Boolean = true,
+    listingRevision: Int = 0,
+    @StringRes title: Int = R.string.download_library,
 ) {
     var entries by remember { mutableStateOf<List<DownloadEntry>>(emptyList()) }
     var recoverable by remember { mutableStateOf<List<RecoverableDownload>>(emptyList()) }
@@ -108,7 +112,7 @@ fun LibraryScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(store, resumeGeneration) {
+    LaunchedEffect(store, resumeGeneration, listingRevision) {
         try { refresh() } catch (_: IOException) { failed = true }
         finally { loading = false }
     }
@@ -118,7 +122,7 @@ fun LibraryScreen(
             title = { Text(stringResource(R.string.library_delete_title)) },
             text = { Text(stringResource(R.string.library_delete_description, entry.fileName)) },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(enabled = openEnabled, onClick = {
                     deletion = null
                     scope.launch {
                         try {
@@ -137,7 +141,7 @@ fun LibraryScreen(
             title = { Text(stringResource(R.string.library_delete_title)) },
             text = { Text(stringResource(R.string.library_delete_description, item.fileName)) },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(enabled = openEnabled, onClick = {
                     recoveryDeletion = null
                     scope.launch {
                         try { failed = !store.forgetRecoverable(item); refresh() }
@@ -166,7 +170,7 @@ fun LibraryScreen(
         )
     }
     Scaffold(topBar = {
-        TopAppBar(title = { Text(stringResource(R.string.download_library)) }, navigationIcon = {
+        TopAppBar(title = { Text(stringResource(title)) }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.browse_back)) }
         })
     }) { padding ->
@@ -220,7 +224,7 @@ fun LibraryScreen(
                             }
                         }
                         Row {
-                            TextButton(onClick = {
+                            TextButton(enabled = openEnabled, onClick = {
                                 try {
                                     val file = store.fileFor(entry)
                                     if (file.isFile && file.length() == entry.sizeBytes) onOpen(entry)
@@ -232,7 +236,7 @@ fun LibraryScreen(
                                     Text(stringResource(R.string.browse_open_website))
                                 }
                             }
-                            TextButton(onClick = { deletion = entry }) { Text(stringResource(R.string.library_delete)) }
+                            TextButton(onClick = { deletion = entry }, enabled = openEnabled) { Text(stringResource(R.string.library_delete)) }
                         }
                         if (entry.provenance.pageUrl.isNotBlank()) {
                             TextButton(onClick = { retryFromSource(entry.provenance.pageUrl) }) {
@@ -254,7 +258,7 @@ fun LibraryScreen(
                                     Text(stringResource(R.string.library_retry_source))
                                 }
                             }
-                            TextButton(onClick = { recoveryDeletion = item }) {
+                            TextButton(onClick = { recoveryDeletion = item }, enabled = openEnabled) {
                                 Text(stringResource(R.string.library_delete))
                             }
                         }

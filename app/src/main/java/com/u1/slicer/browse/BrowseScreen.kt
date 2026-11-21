@@ -1,6 +1,7 @@
 package com.u1.slicer.browse
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -35,6 +36,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.u1.slicer.R
@@ -46,39 +48,47 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.IOException
 
+class BrowsePrintablesState {
+    internal var results by mutableStateOf<List<PrintablesPrint>?>(null)
+    internal var detail by mutableStateOf<PrintablesPrintDetail?>(null)
+    internal var failed by mutableStateOf(false)
+}
+
 /** A shared query with native Printables results and site-owned search pages. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowseScreen(
     client: PrintablesClient,
-    onDownload: suspend (PrintablesPrint, PrintablesFile, String) -> Unit,
+    onDownload: (suspend (PrintablesPrint, PrintablesFile, String) -> Unit)? = null,
     onBrowseSite: (ModelSite, String) -> Unit,
-    onLibrary: () -> Unit,
+    onLibrary: (() -> Unit)?,
     onBack: () -> Unit,
+    onDownloadRequested: ((PrintablesPrint, PrintablesFile) -> Unit)? = null,
+    downloadsEnabled: Boolean = true,
+    printablesState: BrowsePrintablesState = remember { BrowsePrintablesState() },
+    @StringRes webSearchFallback: Int? = null,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val keyboard = LocalSoftwareKeyboardController.current
     var query by rememberSaveable { mutableStateOf("") }
     var selectedSiteId by rememberSaveable { mutableStateOf("printables") }
     val selectedSite = ModelSites.find(selectedSiteId) ?: ModelSites.all.first()
-    var results by remember { mutableStateOf<List<PrintablesPrint>?>(null) }
-    var detail by remember { mutableStateOf<PrintablesPrintDetail?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
 
     fun request(action: suspend () -> Unit) {
         if (busy) return
         busy = true
-        failed = false
+        printablesState.failed = false
         scope.launch {
             try {
                 action()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: IOException) {
-                failed = true
+                printablesState.failed = true
             } catch (_: IllegalArgumentException) {
-                failed = true
+                printablesState.failed = true
             } finally {
                 busy = false
             }
@@ -86,9 +96,9 @@ fun BrowseScreen(
     }
 
     fun back() {
-        if (detail != null && !busy) {
-            detail = null
-            failed = false
+        if (printablesState.detail != null && !busy) {
+            printablesState.detail = null
+            printablesState.failed = false
         } else onBack()
     }
     BackHandler { back() }
@@ -101,23 +111,39 @@ fun BrowseScreen(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.browse_back))
                 }
             },
-            actions = { TextButton(onClick = onLibrary, enabled = !busy) { Text(stringResource(R.string.download_library)) } },
+            actions = {
+                if (onLibrary != null) {
+                    TextButton(onClick = onLibrary, enabled = !busy) { Text(stringResource(R.string.download_library)) }
+                }
+            },
         )
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (failed) {
+            if (printablesState.failed) {
                 Text(stringResource(R.string.browse_request_failed))
-                TextButton(onClick = { openExternalBrowser(context, detail?.print?.pageUrl ?: selectedSite.startUrl) }) {
+                if (webSearchFallback != null && selectedSite.id == "printables" && query.isNotBlank()) {
+                    TextButton(onClick = {
+                        keyboard?.hide()
+                        onBrowseSite(selectedSite, selectedSite.searchUrl(query))
+                    }) {
+                        Text(stringResource(webSearchFallback))
+                    }
+                }
+                TextButton(onClick = { openExternalBrowser(context, printablesState.detail?.print?.pageUrl ?: selectedSite.startUrl) }) {
                     Text(stringResource(R.string.browse_open_website))
                 }
             }
-            val selected = detail
+            val selected = printablesState.detail
             if (selected == null) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModelSites.all.forEach { site ->
                         FilterChip(selected = selectedSiteId == site.id, enabled = !busy,
-                            onClick = { selectedSiteId = site.id; results = null; failed = false },
+                            onClick = {
+                                selectedSiteId = site.id
+                                printablesState.results = null
+                                printablesState.failed = false
+                            },
                             label = { Text(site.name) })
                     }
                 }
@@ -130,20 +156,21 @@ fun BrowseScreen(
                     enabled = !busy,
                 )
                 Button(onClick = {
-                    results = null
+                    keyboard?.hide()
+                    printablesState.results = null
                     if (selectedSite.id == "printables" && query.isNotBlank()) {
-                        request { results = client.search(query) }
+                        request { printablesState.results = client.search(query) }
                     } else {
                         onBrowseSite(selectedSite, if (query.isBlank()) selectedSite.startUrl else selectedSite.searchUrl(query))
                     }
                 }, enabled = !busy) {
                     Text(stringResource(if (query.isBlank()) R.string.browse_visit_site else R.string.browse_search))
                 }
-                if (results?.isEmpty() == true) Text(stringResource(R.string.browse_no_results))
+                if (printablesState.results?.isEmpty() == true) Text(stringResource(R.string.browse_no_results))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(results.orEmpty(), key = { it.id }) { model ->
+                    items(printablesState.results.orEmpty(), key = { it.id }) { model ->
                         Card(Modifier.fillMaxWidth().clickable(enabled = !busy) {
-                            request { detail = client.getPrint(model.id) }
+                            request { printablesState.detail = client.getPrint(model.id) }
                         }) {
                             Column(Modifier.padding(12.dp)) {
                                 Text(model.name)
@@ -169,11 +196,15 @@ fun BrowseScreen(
                             Column(Modifier.padding(12.dp)) {
                                 Text(file.name)
                                 Button(onClick = {
-                                    request {
-                                        val link = client.getDownloadLink(selected.print.id, file)
-                                        onDownload(selected.print, file, link.url)
+                                    if (onDownloadRequested != null) {
+                                        onDownloadRequested(selected.print, file)
+                                    } else if (onDownload != null) {
+                                        request {
+                                            val link = client.getDownloadLink(selected.print.id, file)
+                                            onDownload(selected.print, file, link.url)
+                                        }
                                     }
-                                }, enabled = !busy) { Text(stringResource(R.string.browse_download_open)) }
+                                }, enabled = !busy && downloadsEnabled) { Text(stringResource(R.string.browse_download_open)) }
                             }
                         }
                     }

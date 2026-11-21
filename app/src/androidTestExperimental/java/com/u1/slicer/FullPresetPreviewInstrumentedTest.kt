@@ -9,6 +9,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -28,12 +29,15 @@ import com.u1.slicer.viewer.MeshData
 import com.u1.slicer.viewer.ModelCameraPose
 import com.u1.slicer.viewer.ModelViewerView
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -114,7 +118,62 @@ class FullPresetPreviewInstrumentedTest {
             assertSame(imported, model.state.value.model)
             assertTrue(imported.file.isFile)
             assertNativeModelCleared()
+
+            verifyFileImport(scenario, model, directory, dualColor)
         }
+    }
+
+    private fun verifyFileImport(
+        scenario: ActivityScenario<FullPresetActivity>,
+        model: FullPresetViewModel,
+        directory: File,
+        previousSource: File,
+    ) {
+        val previous = requireNotNull(model.state.value.model)
+        val cube = asset(directory, "cube_10mm.stl")
+        val modelName = "Library cube.STL"
+        val sourcePage = "https://www.printables.com/model/42"
+        scenario.onActivity {
+            assertTrue(model.importModelFile(cube, modelName, "$sourcePage?session=secret#download"))
+            assertFalse(
+                "A second handoff must wait until the active import finishes",
+                model.importModelFile(previousSource, previousSource.name),
+            )
+        }
+        compose.waitUntil(60_000) { model.state.value.operation == null }
+        val preview = requireReady(model)
+        val imported = requireNotNull(model.state.value.model)
+        assertEquals(modelName, imported.name)
+        assertEquals(sourcePage, imported.sourceUrl)
+        assertEquals(10f, preview.mesh.sizeX, 0.001f)
+        assertTrue(imported.file.canonicalFile != cube.canonicalFile)
+        assertArrayEquals(cube.readBytes(), imported.file.readBytes())
+        assertFalse(previous.file.exists())
+        assertTrue(previousSource.isFile)
+        compose.onNodeWithTag("full-presets-model-source").assertHasClickAction()
+        assertNativeModelCleared()
+
+        val oversized = File(directory, "oversized.stl")
+        val oversizedLength = 64L * 1024 * 1024 + 1
+        RandomAccessFile(oversized, "rw").use { it.setLength(oversizedLength) }
+        scenario.onActivity { assertTrue(model.importModelFile(oversized, oversized.name)) }
+        compose.waitUntil(60_000) { model.state.value.operation == null }
+        assertEquals(R.string.full_presets_model_too_large, model.state.value.error?.message)
+        assertSame(imported, model.state.value.model)
+        assertSame(preview, model.state.value.preview)
+        assertArrayEquals(cube.readBytes(), imported.file.readBytes())
+        assertEquals(oversizedLength, oversized.length())
+        assertEquals(listOf(imported.file.parentFile), imported.file.parentFile?.parentFile?.listFiles()?.toList())
+
+        val invalidArchive = File(directory, "invalid.3mf").apply { writeText("not a 3MF archive") }
+        scenario.onActivity { assertTrue(model.importModelFile(invalidArchive, invalidArchive.name)) }
+        compose.waitUntil(60_000) { model.state.value.operation == null }
+        assertEquals(R.string.full_presets_3mf_invalid, model.state.value.error?.message)
+        assertSame(imported, model.state.value.model)
+        assertSame(preview, model.state.value.preview)
+        assertTrue(invalidArchive.isFile)
+        assertTrue(cube.isFile)
+        assertNativeModelCleared()
     }
 
     private fun requireReady(model: FullPresetViewModel): FullPresetPreview.Ready {

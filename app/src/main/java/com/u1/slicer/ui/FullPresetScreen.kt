@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,9 +20,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Print
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.ViewInAr
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -40,8 +45,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -50,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -59,23 +67,51 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.u1.slicer.R
+import com.u1.slicer.browse.BrowseScreen
+import com.u1.slicer.browse.ModelSite
+import com.u1.slicer.browse.ModelSites
+import com.u1.slicer.browse.SiteBrowserScreen
+import com.u1.slicer.browse.openExternalBrowser
+import com.u1.slicer.library.ArchiveScreen
+import com.u1.slicer.library.DownloadEntry
+import com.u1.slicer.library.LibraryScreen
+import com.u1.slicer.presets.FullPresetCatalogTransfer
+import com.u1.slicer.presets.FullPresetCatalogViewModel
 import com.u1.slicer.presets.FullPresetViewModel
 import com.u1.slicer.ui.printer.experimental.ExperimentalPrinterDashboard
+import java.io.IOException
 
 private enum class FullPresetTab(@StringRes val label: Int, val icon: ImageVector, val tag: String) {
     PREPARE(R.string.full_presets_title, Icons.Outlined.ViewInAr, "full-presets-tab-prepare"),
-    PRINTER(R.string.full_presets_printer_tab, Icons.Outlined.Print, "full-presets-tab-printer"),
+    BROWSE(R.string.full_presets_browse_tab, Icons.Outlined.Search, "full-presets-tab-browse"),
+    LIBRARY(R.string.full_presets_library_tab, Icons.Outlined.FolderOpen, "full-presets-tab-library"),
+    PRINTER(R.string.full_presets_printer_tab, Icons.Outlined.Print, "full-presets-tab-printer");
+
+    val isCatalog: Boolean get() = this == BROWSE || this == LIBRARY
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun FullPresetScreen(onBack: () -> Unit) {
+internal fun FullPresetScreen(
+    onBack: () -> Unit,
+    catalog: FullPresetCatalogViewModel = viewModel(),
+) {
     val model: FullPresetViewModel = viewModel()
     val state by model.state.collectAsState()
     val enabled = state.operation == null
+    val catalogState by catalog.state.collectAsState()
+    val transfer = catalogState.transfer
+    val catalogEnabled = enabled && transfer !is FullPresetCatalogTransfer.InProgress
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf(FullPresetTab.PREPARE) }
     val savedContent = rememberSaveableStateHolder()
+    var browserSiteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var browserUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    var archiveHash by rememberSaveable { mutableStateOf<String?>(null) }
+    var archiveSourceUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    var catalogOrigin by rememberSaveable { mutableLongStateOf(0L) }
+    val browserSite = browserSiteId?.let(ModelSites::find)
+    val context = LocalContext.current
     val screen = LocalConfiguration.current
     val showRail = screen.screenWidthDp >= 840 ||
         (screen.screenWidthDp >= 560 && screen.orientation == Configuration.ORIENTATION_LANDSCAPE)
@@ -102,16 +138,82 @@ internal fun FullPresetScreen(onBack: () -> Unit) {
         )
     }
 
+    fun closeBrowser() {
+        browserSiteId = null
+        browserUrl = null
+        savedContent.removeState("catalog-browser")
+        catalogOrigin++
+    }
+
+    fun closeArchive() {
+        archiveHash = null
+        archiveSourceUrl = null
+        catalogOrigin++
+    }
+
+    fun selectTab(next: FullPresetTab) {
+        if (tab == next && browserSiteId == null && archiveHash == null) return
+        tab = next
+        closeBrowser()
+        closeArchive()
+    }
+
+    fun openBrowser(site: ModelSite, url: String) {
+        closeBrowser()
+        browserSiteId = site.id
+        browserUrl = url
+    }
+
+    fun openEntry(entry: DownloadEntry, sourceUrl: String?) {
+        if (model.state.value.operation != null ||
+            catalog.state.value.transfer is FullPresetCatalogTransfer.InProgress
+        ) return
+        if (entry.fileName.endsWith(".zip", ignoreCase = true)) {
+            if (!tab.isCatalog) selectTab(FullPresetTab.LIBRARY)
+            archiveHash = entry.sha256
+            archiveSourceUrl = sourceUrl
+            catalogOrigin++
+            catalog.dismissTransfer()
+            return
+        }
+        try {
+            val file = catalog.store.fileFor(entry)
+            if (!file.isFile || file.length() != entry.sizeBytes) throw IOException("Download missing")
+            if (model.importModelFile(file, entry.fileName, sourceUrl)) {
+                catalog.dismissTransfer()
+                selectTab(FullPresetTab.PREPARE)
+            }
+        } catch (_: IOException) {
+            catalog.showFailure(R.string.library_failed)
+        } catch (_: IllegalArgumentException) {
+            catalog.showFailure(R.string.library_failed)
+        }
+    }
+
+    LaunchedEffect(transfer) {
+        if (transfer is FullPresetCatalogTransfer.Ready && transfer.origin != null) {
+            if (tab.isCatalog && transfer.origin == catalogOrigin && model.state.value.operation == null) {
+                openEntry(transfer.entry, transfer.sourceUrl)
+            } else {
+                catalog.requireExplicitOpen(transfer)
+            }
+        }
+    }
+
     val navigateBack: () -> Unit = {
-        if (tab == FullPresetTab.PRINTER) tab = FullPresetTab.PREPARE
-        else if (enabled) onBack()
+        when {
+            archiveHash != null -> closeArchive()
+            browserSiteId != null -> closeBrowser()
+            tab != FullPresetTab.PREPARE -> selectTab(FullPresetTab.PREPARE)
+            enabled -> onBack()
+        }
     }
     BackHandler(enabled = !settingsOpen, onBack = navigateBack)
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
-            TopAppBar(
+            if (!tab.isCatalog) TopAppBar(
                 title = {
                     Text(
                         stringResource(tab.label),
@@ -128,16 +230,28 @@ internal fun FullPresetScreen(onBack: () -> Unit) {
             )
         },
         bottomBar = {
-            if (!showRail) {
+            val showCatalogStatus = transfer !is FullPresetCatalogTransfer.Idle || (tab.isCatalog && !enabled)
+            if (!showRail || showCatalogStatus) {
                 Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) {
                     Column(
                         modifier = Modifier.windowInsetsPadding(
                             WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
                         ),
                     ) {
-                        if (tab == FullPresetTab.PREPARE) primaryActions()
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        FullPresetBottomNavigation(tab, onSelect = { tab = it })
+                        if (showCatalogStatus) {
+                            FullPresetCatalogTransferBar(
+                                transfer = transfer,
+                                workspaceBusy = !enabled,
+                                onCancel = catalog::cancelTransfer,
+                                onDismiss = catalog::dismissTransfer,
+                                onOpen = { ready -> openEntry(ready.entry, ready.sourceUrl) },
+                            )
+                        }
+                        if (!showRail) {
+                            if (tab == FullPresetTab.PREPARE) primaryActions()
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            FullPresetBottomNavigation(tab, onSelect = ::selectTab)
+                        }
                     }
                 }
             }
@@ -147,11 +261,42 @@ internal fun FullPresetScreen(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
         ) {
             if (showRail) {
-                FullPresetNavigationRail(tab, onSelect = { tab = it })
+                FullPresetNavigationRail(tab, onSelect = ::selectTab)
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
             Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                savedContent.SaveableStateProvider(tab.name) {
+                val currentArchive = archiveHash
+                if (tab.isCatalog && currentArchive != null) {
+                    Box(Modifier.widthIn(max = 920.dp).fillMaxSize()) {
+                        ArchiveScreen(
+                            store = catalog.store,
+                            hash = currentArchive,
+                            onBack = ::closeArchive,
+                            openEnabled = catalogEnabled,
+                            onCandidateSelected = { entry, candidate ->
+                                if (model.state.value.operation == null) {
+                                    catalog.extract(entry, candidate, archiveSourceUrl, catalogOrigin)
+                                }
+                            },
+                        )
+                    }
+                } else if (tab.isCatalog && browserSite != null) {
+                    val browserOrigin = catalogOrigin
+                    savedContent.SaveableStateProvider("catalog-browser") {
+                        SiteBrowserScreen(
+                            site = browserSite,
+                            initialUrl = browserUrl ?: browserSite.startUrl,
+                            onDownload = { download ->
+                                if (browserOrigin == catalogOrigin && model.state.value.operation == null) {
+                                    catalog.downloadFromBrowser(browserSite, download, browserOrigin)
+                                }
+                            },
+                            onBack = ::closeBrowser,
+                            downloadsEnabled = catalogEnabled,
+                            restoreLastPage = true,
+                        )
+                    }
+                } else savedContent.SaveableStateProvider(tab.name) {
                     when (tab) {
                         FullPresetTab.PRINTER -> ExperimentalPrinterDashboard(
                             Modifier.widthIn(max = 1120.dp).fillMaxSize(),
@@ -163,6 +308,37 @@ internal fun FullPresetScreen(onBack: () -> Unit) {
                             onSliceAgain = model::slice,
                             sideActions = primaryActions.takeIf { showRail },
                         )
+                        FullPresetTab.BROWSE -> Box(Modifier.widthIn(max = 920.dp).fillMaxSize()) {
+                            BrowseScreen(
+                                client = catalog.printablesClient,
+                                onBrowseSite = ::openBrowser,
+                                onLibrary = null,
+                                onBack = navigateBack,
+                                onDownloadRequested = { print, file ->
+                                    if (model.state.value.operation == null) {
+                                        catalog.downloadPrintables(print, file, catalogOrigin)
+                                    }
+                                },
+                                downloadsEnabled = catalogEnabled,
+                                printablesState = catalog.browseState,
+                                webSearchFallback = R.string.full_presets_catalog_search_website,
+                            )
+                        }
+                        FullPresetTab.LIBRARY -> Box(Modifier.widthIn(max = 920.dp).fillMaxSize()) {
+                            LibraryScreen(
+                                store = catalog.store,
+                                onOpen = { entry -> openEntry(entry, entry.provenance.pageUrl.takeIf(String::isNotBlank)) },
+                                onBack = navigateBack,
+                                onRetryFromSource = { url ->
+                                    val site = ModelSites.forUrl(url)
+                                    if (site != null) openBrowser(site, url)
+                                    else if (!openExternalBrowser(context, url)) catalog.showFailure(R.string.library_failed)
+                                },
+                                openEnabled = catalogEnabled,
+                                listingRevision = catalogState.libraryRevision,
+                                title = R.string.full_presets_library_tab,
+                            )
+                        }
                     }
                 }
             }
@@ -183,7 +359,7 @@ internal fun FullPresetScreen(onBack: () -> Unit) {
 
 @Composable
 private fun FullPresetBottomNavigation(selected: FullPresetTab, onSelect: (FullPresetTab) -> Unit) {
-    val height = 64.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.4f)
+    val height = 64.dp * LocalDensity.current.fontScale.coerceIn(1f, 2f)
     val colors = NavigationBarItemDefaults.colors(
         selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
         selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -200,7 +376,7 @@ private fun FullPresetBottomNavigation(selected: FullPresetTab, onSelect: (FullP
                 selected = tab == selected,
                 onClick = { onSelect(tab) },
                 icon = { Icon(tab.icon, contentDescription = null) },
-                label = { Text(stringResource(tab.label)) },
+                label = { Text(stringResource(tab.label), maxLines = 2) },
                 colors = colors,
                 modifier = Modifier.testTag(tab.tag),
             )
@@ -215,19 +391,22 @@ private fun FullPresetNavigationRail(selected: FullPresetTab, onSelect: (FullPre
         selectedTextColor = MaterialTheme.colorScheme.primary,
         indicatorColor = MaterialTheme.colorScheme.primaryContainer,
     )
-    NavigationRail(
-        containerColor = MaterialTheme.colorScheme.surface,
-        windowInsets = WindowInsets(0, 0, 0, 0),
-    ) {
-        FullPresetTab.entries.forEach { tab ->
-            NavigationRailItem(
-                selected = tab == selected,
-                onClick = { onSelect(tab) },
-                icon = { Icon(tab.icon, contentDescription = null) },
-                label = { Text(stringResource(tab.label)) },
-                colors = colors,
-                modifier = Modifier.testTag(tab.tag),
-            )
+    Box(Modifier.fillMaxHeight().background(MaterialTheme.colorScheme.surface)) {
+        NavigationRail(
+            modifier = Modifier.verticalScroll(rememberScrollState()),
+            containerColor = MaterialTheme.colorScheme.surface,
+            windowInsets = WindowInsets(0, 0, 0, 0),
+        ) {
+            FullPresetTab.entries.forEach { tab ->
+                NavigationRailItem(
+                    selected = tab == selected,
+                    onClick = { onSelect(tab) },
+                    icon = { Icon(tab.icon, contentDescription = null) },
+                    label = { Text(stringResource(tab.label), maxLines = 2) },
+                    colors = colors,
+                    modifier = Modifier.testTag(tab.tag),
+                )
+            }
         }
     }
 }

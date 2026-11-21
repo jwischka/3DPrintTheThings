@@ -12,6 +12,8 @@ on:
       - scripts/native/tests/test_shipping_instrumentation.py
       - app/src/androidTest/java/com/u1/slicer/MainActivityWorkflowInstrumentedTest.kt
       - app/src/main/java/com/u1/slicer/viewer/**
+      - app/src/main/java/com/u1/slicer/browse/**
+      - app/src/main/java/com/u1/slicer/library/**
 
 permissions:
   contents: read

@@ -3,6 +3,7 @@ package com.u1.slicer.presets
 import android.app.Application
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.annotation.MainThread
 import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,10 +12,12 @@ import com.u1.slicer.R
 import com.u1.slicer.data.ModelFileNaming
 import com.u1.slicer.data.SliceConfig
 import com.u1.slicer.data.SliceResult
+import com.u1.slicer.library.publicDownloadUrl
 import com.u1.slicer.presets.preview.FullPresetPreview
 import com.u1.slicer.presets.preview.FullPresetPreviewLoader
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -42,7 +45,7 @@ internal data class FullPresetSelection(
     )
 }
 
-internal data class FullPresetModel(val name: String, val file: File)
+internal data class FullPresetModel(val name: String, val file: File, val sourceUrl: String? = null)
 
 internal data class FullPresetOutput(val filename: String, val result: SliceResult)
 
@@ -150,12 +153,29 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
     }
 
     fun importModel(uri: Uri) {
+        importModel { copyModel(uri) }
+    }
+
+    /** Copy a Library file into the Prepare session. Returns false while another operation is active. */
+    @MainThread
+    fun importModelFile(file: File, displayName: String, sourceUrl: String? = null): Boolean =
+        importModel {
+            val extension = modelExtension(displayName) ?: modelExtension(file.name)
+                ?: throw WorkflowFailure(R.string.full_presets_model_type)
+            if (!file.isFile) throw WorkflowFailure(R.string.full_presets_document_read_failed)
+            if (file.length() > MAX_MODEL_BYTES) throw WorkflowFailure(R.string.full_presets_model_too_large)
+            copyModel(displayName.ifBlank { file.name }, extension, fullPresetModelSourceUrl(sourceUrl)) {
+                file.inputStream()
+            }
+        }
+
+    private fun importModel(copy: suspend () -> FullPresetModel): Boolean =
         runOperation(FullPresetOperation.IMPORTING_MODEL, R.string.full_presets_model_import_failed) {
             val previous = state.value
             mutableState.update { it.copy(preview = FullPresetPreview.Loading) }
             try {
                 val (model, preview) = withContext(Dispatchers.IO) {
-                    val imported = copyModel(uri)
+                    val imported = copy()
                     var complete = false
                     try {
                         val preview = FullPresetPreviewLoader.load(imported.file)
@@ -175,7 +195,6 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                 }
             }
         }
-    }
 
     fun slice() {
         val snapshot = state.value
@@ -249,9 +268,9 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         @StringRes failure: Int,
         invalidateOutput: Boolean = true,
         action: suspend () -> Unit,
-    ) {
+    ): Boolean {
         val snapshot = state.value
-        if (snapshot.operation != null) return
+        if (snapshot.operation != null) return false
         mutableState.value = snapshot.copy(
             operation = operation,
             progress = null,
@@ -280,27 +299,35 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                 mutableState.update { it.copy(operation = null, progress = null) }
             }
         }
+        return true
     }
 
     private suspend fun copyModel(uri: Uri): FullPresetModel {
         val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-        val extension = when (displayName?.substringAfterLast('.', "")?.lowercase(Locale.ROOT)) {
-            "stl" -> "stl"
-            "3mf" -> "3mf"
-            else -> when (resolver.getType(uri)) {
-                "model/stl", "application/sla", "application/vnd.ms-pki.stl" -> "stl"
-                "model/3mf", "application/vnd.ms-3mfdocument" -> "3mf"
-                else -> throw WorkflowFailure(R.string.full_presets_model_type)
-            }
+        val extension = modelExtension(displayName) ?: when (resolver.getType(uri)) {
+            "model/stl", "application/sla", "application/vnd.ms-pki.stl" -> "stl"
+            "model/3mf", "application/vnd.ms-3mfdocument" -> "3mf"
+            else -> throw WorkflowFailure(R.string.full_presets_model_type)
         }
+        return copyModel(displayName, extension) { resolver.openInputStream(uri) }
+    }
+
+    private fun modelExtension(name: String?): String? =
+        name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT)?.takeIf { it == "stl" || it == "3mf" }
+
+    private suspend fun copyModel(
+        displayName: String?,
+        extension: String,
+        sourceUrl: String? = null,
+        openInput: () -> InputStream?,
+    ): FullPresetModel {
         val dir = File(sessionDir, UUID.randomUUID().toString())
         if (!dir.mkdirs()) throw IOException("Cannot create model cache directory")
         val file = File(dir, "model.$extension")
         var complete = false
         try {
-            val input = resolver.openInputStream(uri)
-                ?: throw WorkflowFailure(R.string.full_presets_document_read_failed)
+            val input = openInput() ?: throw WorkflowFailure(R.string.full_presets_document_read_failed)
             val context = currentCoroutineContext()
             input.use { source ->
                 file.outputStream().use { target ->
@@ -325,7 +352,7 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
                 }
             }
             complete = true
-            return FullPresetModel(displayName?.takeIf { it.isNotBlank() } ?: file.name, file)
+            return FullPresetModel(displayName?.takeIf { it.isNotBlank() } ?: file.name, file, sourceUrl)
         } finally {
             if (!complete) dir.deleteRecursively()
         }
@@ -438,5 +465,14 @@ internal class FullPresetViewModel(application: Application) : AndroidViewModel(
         const val MAX_FILAMENTS = 16
         private const val MAX_MODEL_BYTES = 64L * 1024 * 1024
         private const val MAX_ERROR_LENGTH = 500
+    }
+}
+
+internal fun fullPresetModelSourceUrl(sourceUrl: String?): String? {
+    if (sourceUrl.isNullOrBlank()) return null
+    return try {
+        publicDownloadUrl(sourceUrl).takeIf { it.isHttps }?.toString()
+    } catch (_: IllegalArgumentException) {
+        null
     }
 }
