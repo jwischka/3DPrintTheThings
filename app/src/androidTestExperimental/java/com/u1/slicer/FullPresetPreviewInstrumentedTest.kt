@@ -90,14 +90,13 @@ class FullPresetPreviewInstrumentedTest {
             val painted = mutableMapOf<Int, MutableSet<List<Float>>>()
             for (batch in preview.mesh.batches) {
                 val materials = requireNotNull(batch.materialIndices)
-                val rgba = requireNotNull(batch.colorBuffer)
+                val geometry = batch.geometry
                 for (triangle in 0 until batch.triangleCount) {
                     val slot = materials.get(triangle).toInt() and 255
-                    val firstVertex = triangle * 3 * 4
                     val colors = painted.getOrPut(slot) { mutableSetOf() }
                     for (vertex in 0 until 3) {
-                        val base = firstVertex + vertex * 4
-                        colors += listOf(rgba.get(base), rgba.get(base + 1), rgba.get(base + 2))
+                        val base = (triangle * 3 + vertex) * MeshData.FLOATS_PER_VERTEX + 6
+                        colors += listOf(geometry.get(base), geometry.get(base + 1), geometry.get(base + 2))
                     }
                 }
             }
@@ -311,7 +310,7 @@ class FullPresetPreviewInstrumentedTest {
         if (mesh == null) return "no uploaded mesh"
         val first = mesh.batches.first()
         val vertex = (0 until 3).map(first.geometry::get)
-        val color = first.colorBuffer?.let { rgba -> (0 until 4).map(rgba::get) }
+        val color = (6 until MeshData.FLOATS_PER_VERTEX).map(first.geometry::get)
         return "${mesh.vertexCount} vertices, bounds=" +
             "[${mesh.minX}, ${mesh.minY}, ${mesh.minZ}]-[${mesh.maxX}, ${mesh.maxY}, ${mesh.maxZ}], " +
             "first vertex=$vertex, material=${first.materialIndices?.get(0)?.toInt()?.and(255)}, color=$color"

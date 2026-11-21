@@ -7,7 +7,6 @@ import com.u1.slicer.NativeLibrary
 import com.u1.slicer.R
 import com.u1.slicer.viewer.MeshData
 import com.u1.slicer.viewer.ModelCameraPose
-import com.u1.slicer.viewer.NativePreviewMesh
 import com.u1.slicer.viewer.NativeRenderBatch
 import java.io.File
 import java.nio.ByteBuffer
@@ -63,7 +62,7 @@ internal object FullPresetPreviewLoader {
                 FullPresetPreview.Unavailable(R.string.full_presets_preview_unavailable)
             } else {
                 // Scene batches emit file-indexed material IDs before the native mesh is compacted.
-                mesh.recolor(previewPalette(filamentColors))
+                mesh.colorFullPresetPreview(previewPalette(filamentColors)) { context.ensureActive() }
                 FullPresetPreview.Ready(mesh)
             }
         } catch (error: InvalidModel) {
@@ -89,7 +88,12 @@ internal object FullPresetPreviewLoader {
                 native.nativeGetPrepareRenderSceneTriangleCount(scene, index)
             }
             val triangleCount = batchSizes.sumOf { it.toLong() }
-            if (triangleCount !in 1L..NativePreviewMesh.MAX_KOTLIN_PREVIEW_TRIANGLES.toLong()) return null
+            if (!canCopyFullPresetPreview(triangleCount)) {
+                if (triangleCount > MAX_FULL_PRESET_PREVIEW_TRIANGLES) {
+                    Log.w(TAG, "Preview triangle count $triangleCount exceeds the snapshot limit $MAX_FULL_PRESET_PREVIEW_TRIANGLES")
+                }
+                return null
+            }
             // The worker can complete with partial batches when its native build fails.
             val completedSizes = native.nativeGetPreviewBatchTriangleCounts() ?: return null
             if (completedSizes.filter { it > 0 } != batchSizes.toList()) return null
@@ -156,5 +160,38 @@ internal object FullPresetPreviewLoader {
             }
         } ?: Color.parseColor(defaultColors[slot % defaultColors.size])
         floatArrayOf(Color.red(color) / 255f, Color.green(color) / 255f, Color.blue(color) / 255f, 1f)
+    }
+}
+
+// Interleaved vertex colors keep a 700K-triangle snapshot near the retained CPU and GPU cost
+// of 500K triangles with a separate color buffer. Native scene buffers briefly coexist.
+private const val MAX_FULL_PRESET_PREVIEW_TRIANGLES = 700_000L
+
+internal fun canCopyFullPresetPreview(triangleCount: Long): Boolean =
+    triangleCount in 1L..MAX_FULL_PRESET_PREVIEW_TRIANGLES
+
+internal fun MeshData.colorFullPresetPreview(palette: List<FloatArray>, checkCancellation: () -> Unit) {
+    val modifierStart = modifierBlockStartTriangle ?: Int.MAX_VALUE
+    var firstTriangle = 0
+    for (batch in batches) {
+        val materials = requireNotNull(batch.materialIndices)
+        val geometry = batch.geometry
+        for (triangle in 0 until batch.triangleCount) {
+            if (triangle % 4096 == 0) checkCancellation()
+            val slot = materials.get(triangle).toInt() and 0xFF
+            val color = if (firstTriangle + triangle >= modifierStart) {
+                MeshData.MODIFIER_PREVIEW_COLOR
+            } else {
+                palette[slot.coerceAtMost(palette.lastIndex)]
+            }
+            for (vertex in 0 until 3) {
+                val offset = (triangle * 3 + vertex) * MeshData.FLOATS_PER_VERTEX + 6
+                geometry.put(offset, color[0])
+                geometry.put(offset + 1, color[1])
+                geometry.put(offset + 2, color[2])
+                geometry.put(offset + 3, color[3])
+            }
+        }
+        firstTriangle += batch.triangleCount
     }
 }

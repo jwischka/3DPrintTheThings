@@ -45,8 +45,13 @@ extraction holds the native scene mutex while loading the file and copying
 render batches into Android-owned buffers. The native preview scene is released
 before the live model is cleared and the mutex is returned. These buffers
 preserve 3MF transforms and file-indexed filament colors and can be uploaded
-again after EGL context loss. Metadata fallback retains a slot for every part,
-including parts inheriting the object tool, to avoid shifting later assignments.
+again after EGL context loss. The snapshot packs colors into its interleaved
+vertex data, which bounds retained CPU and GPU memory without a separate color
+buffer. The snapshot allows up to 700,000 triangles emitted by the native scene,
+including additional facets created when expanding color paint. Native buffers
+briefly coexist with the snapshot during copying. Metadata fallback retains a
+slot for every part, including parts inheriting the object tool, to avoid
+shifting later assignments.
 The viewport fits the model and supports orbit,
 pan, and zoom. The imported preview retains its camera pose across tab switches
 and activity rotation, with zoom relative to the fitted viewport. Fit resets
