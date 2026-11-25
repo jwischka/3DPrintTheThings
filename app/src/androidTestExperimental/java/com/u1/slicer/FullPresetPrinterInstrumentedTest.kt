@@ -94,6 +94,7 @@ class FullPresetPrinterInstrumentedTest {
                             "/server/webcams/list" -> MockResponse().setBody(
                                 """{"result":{"webcams":[{"enabled":true,"snapshot_url":"$endpoint/snapshot.jpg"}]}}""",
                             )
+                            "/server/files/metadata" -> MockResponse().setBody("""{"result":{"estimated_time":2880}}""" )
                             "/snapshot.jpg" -> MockResponse().addHeader("Content-Type", "image/jpeg")
                                 .setBody(Buffer().write(jpeg))
                             else -> MockResponse().setResponseCode(404)
@@ -112,7 +113,11 @@ class FullPresetPrinterInstrumentedTest {
                         compose.onNodeWithText("Example bracket.gcode").assertIsDisplayed()
                         compose.onNodeWithText("72% complete").assertIsDisplayed()
                         compose.onNodeWithText("Elapsed 2 min").assertIsDisplayed()
-                        compose.onNodeWithText("Remaining", substring = true).assertDoesNotExist()
+                        compose.onNodeWithTag("experimental-printer-remaining").performScrollTo()
+                            .assertIsDisplayed().assertTextContains("About 46 minutes remaining")
+                        compose.onNodeWithTag("experimental-printer-estimated-finish").performScrollTo()
+                            .assertIsDisplayed().assertTextContains("Estimated finish:")
+                        compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
                         compose.waitUntil(20_000) {
                             compose.onAllNodesWithText("Snapshot received at", substring = true)
                                 .fetchSemanticsNodes().isNotEmpty()
@@ -134,6 +139,7 @@ class FullPresetPrinterInstrumentedTest {
 
                         mode.set(Mode.PAUSED)
                         waitFor("Print paused")
+                        compose.onNodeWithTag("experimental-printer-estimated-finish").assertDoesNotExist()
                         compose.onNodeWithTag("experimental-printer-reported-reason").performScrollTo()
                             .assertIsDisplayed().assertTextContains("Reported by printer\n$PAUSE_REASON")
                         compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
@@ -143,6 +149,7 @@ class FullPresetPrinterInstrumentedTest {
                         mode.set(Mode.OFFLINE)
                         compose.onNodeWithText("Retry now").performClick()
                         waitFor("Printer offline")
+                        compose.onNodeWithTag("experimental-printer-estimated-finish").assertDoesNotExist()
                         compose.onNodeWithText("Showing last known values from", substring = true).assertIsDisplayed()
                         assertEquals(2, compose.onAllNodesWithText("Last known values at", substring = true)
                             .fetchSemanticsNodes().size)
@@ -414,7 +421,7 @@ class FullPresetPrinterInstrumentedTest {
         const val PAUSE_REASON = "Fixture filament runout"
         const val PRINTING = """{"result":{"status":{
             "webhooks":{"state":"ready"},
-            "print_stats":{"state":"printing","filename":"Example bracket.gcode","total_duration":128,
+            "print_stats":{"state":"printing","filename":"Example bracket.gcode","total_duration":128,"print_duration":120,
                 "info":{"current_layer":28,"total_layer":50}},
             "display_status":{"progress":0.72},
             "virtual_sdcard":{"progress":0.78},

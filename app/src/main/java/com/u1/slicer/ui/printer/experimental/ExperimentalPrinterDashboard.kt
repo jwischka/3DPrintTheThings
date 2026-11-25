@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.text.format.DateFormat
+import android.text.format.DateUtils
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -81,6 +83,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.text.NumberFormat
 import java.util.Date
+import kotlin.math.ceil
 
 private const val CAMERA_ASPECT_RATIO = 16f / 9f
 
@@ -136,7 +139,7 @@ fun ExperimentalPrinterDashboard(modifier: Modifier = Modifier) {
     }
 }
 
-private data class StatusReading(val snapshot: MoonrakerStatusSnapshot, val receivedAt: Long)
+private data class StatusReading(val snapshot: MoonrakerStatusSnapshot, val receivedAt: Long, val remainingSeconds: Double?)
 
 @Composable
 private fun ConnectedPrinter(
@@ -160,13 +163,16 @@ private fun ConnectedPrinter(
     }
     LaunchedEffect(client, lifecycle, retryVersion) {
         val printer = client ?: return@LaunchedEffect
+        val printTime = ExperimentalPrintTimeReader(printer::readEstimatedPrintSeconds)
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             refreshing = true
             while (isActive) {
                 val result = printer.readStatusSnapshot()
                 when (result) {
                     is MoonrakerStatusResult.Received -> {
-                        latest = StatusReading(result.snapshot, System.currentTimeMillis())
+                        val receivedAt = System.currentTimeMillis()
+                        val remaining = printTime.remainingSeconds(result.snapshot)
+                        latest = StatusReading(result.snapshot, receivedAt, remaining)
                         failure = null
                     }
                     is MoonrakerStatusResult.Unavailable -> failure = result
@@ -250,7 +256,7 @@ private fun ConnectedPrinter(
 
     val reading = latest
     val staleAt = reading?.receivedAt?.takeUnless { online }
-    reading?.let { JobStatusCard(it.snapshot, staleAt) }
+    reading?.let { JobStatusCard(it, staleAt) }
     CameraCard(client, online, cameraMaxWidth, connection.endpoint, configurationVersion)
     reading?.let { TemperaturesCard(it.snapshot, staleAt) }
     filaments?.let { LoadedFilamentsCard(it, filamentsStale || !it.isFresh(SystemClock.elapsedRealtime())) }
@@ -306,7 +312,8 @@ private fun LoadedFilamentsCard(snapshot: U1FilamentSnapshot, stale: Boolean) {
 }
 
 @Composable
-private fun JobStatusCard(snapshot: MoonrakerStatusSnapshot, staleAt: Long?) {
+private fun JobStatusCard(reading: StatusReading, staleAt: Long?) {
+    val snapshot = reading.snapshot
     DashboardCard {
         val readiness = snapshot.klippyState
         val state = snapshot.printState
@@ -352,8 +359,22 @@ private fun JobStatusCard(snapshot: MoonrakerStatusSnapshot, staleAt: Long?) {
                 Text(stringResource(label, duration(it)))
             }
             if (state == "printing" || state == "paused") {
-                snapshot.remainingSeconds?.let {
-                    Text(stringResource(R.string.experimental_printer_remaining, duration(it)))
+                reading.remainingSeconds?.let { remaining ->
+                    val minutes = ceil(remaining / 60).toInt().coerceAtLeast(1)
+                    Text(
+                        pluralStringResource(R.plurals.experimental_printer_remaining_minutes, minutes, minutes),
+                        modifier = Modifier.testTag("experimental-printer-remaining"),
+                    )
+                    if (state == "printing" && staleAt == null) {
+                        val finish = reading.receivedAt + (remaining * 1000).toLong()
+                        val time = if (DateUtils.isToday(finish)) timeOfDay(finish)
+                        else DateUtils.formatDateTime(LocalContext.current, finish,
+                            DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME)
+                        Text(
+                            stringResource(R.string.experimental_printer_estimated_finish, time),
+                            modifier = Modifier.testTag("experimental-printer-estimated-finish"),
+                        )
+                    }
                 }
             }
             val current = snapshot.currentLayer

@@ -43,6 +43,11 @@
     <string name="experimental_printer_elapsed">Elapsed %1$s</string>
     <string name="experimental_printer_print_time">Print time %1$s</string>
     <string name="experimental_printer_remaining">Remaining %1$s</string>
+    <plurals name="experimental_printer_remaining_minutes">
+        <item quantity="one">About %1$d minute remaining</item>
+        <item quantity="other">About %1$d minutes remaining</item>
+    </plurals>
+    <string name="experimental_printer_estimated_finish">Estimated finish: %1$s</string>
     <string name="experimental_printer_layers">Layer %1$d of %2$d</string>
     <string name="experimental_printer_duration_seconds">%1$d s</string>
     <string name="experimental_printer_duration_minutes">%1$d min</string>

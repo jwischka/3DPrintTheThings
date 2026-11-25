@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -323,6 +324,19 @@ class MoonrakerClient(private val baseClient: OkHttpClient = defaultClient()) {
                 }
             }
         }
+    }
+
+    /** Read the slicer's total-time estimate without delaying monitoring on slow metadata. */
+    internal suspend fun readEstimatedPrintSeconds(filename: String): Double? {
+        if (filename.isBlank() || filename.length > 1024 || filename.any { it.isISOControl() }) return null
+        val (readClient, endpoint) = synchronized(authLock) { client to baseUrl }
+        val requestUrl = "$endpoint/server/files/metadata".toHttpUrlOrNull()?.newBuilder()
+            ?.addQueryParameter("filename", filename)?.build() ?: return null
+        val reply = withTimeoutOrNull(2_000L) { MoonrakerJsonRead(readClient).get(requestUrl.toString()) }
+            as? MoonrakerJsonRead.Reply.Success
+            ?: return null
+        return reply.json.optJSONObject("result")?.optDouble("estimated_time")
+            ?.takeIf { it.isFinite() && it > 0.0 }
     }
 
     /** Read the physical U1 slot fields without changing generic status monitoring. */

@@ -23,6 +23,27 @@ import java.util.concurrent.TimeUnit
 
 class MoonrakerMonitoringTest {
     @Test
+    fun readsBoundedMetadataEstimateWithEncodedFilenameAndScopedKey() = runBlocking {
+        server().use { server ->
+            val client = server.client().apply { configureApiKey("fixture-key") }
+            val filename = "folder/part & detail?.gcode"
+            server.enqueue(MockResponse().setBody("""{"result":{"estimated_time":5294}}"""))
+            assertEquals(5294.0, client.readEstimatedPrintSeconds(filename))
+            val request = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(filename, request.requestUrl?.queryParameter("filename"))
+            assertEquals("/server/files/metadata", request.requestUrl?.encodedPath)
+            assertEquals("fixture-key", request.getHeader("X-Api-Key"))
+            for (body in listOf("{}", "{\"result\":{\"estimated_time\":-1}}", "{\"result\":{\"estimated_time\":\"NaN\"}}")) {
+                server.enqueue(MockResponse().setBody(body))
+                assertNull(client.readEstimatedPrintSeconds(filename))
+            }
+            server.enqueue(MockResponse().setResponseCode(404))
+            assertNull(client.readEstimatedPrintSeconds(filename))
+            assertNull(client.readEstimatedPrintSeconds(""))
+        }
+    }
+
+    @Test
     fun readsDisplayProgressAndReportedMetricsWithoutLosingZeroes() = runBlocking {
         server().use { server ->
             server.enqueue(MockResponse().setBody("""

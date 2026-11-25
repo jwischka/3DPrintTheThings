@@ -117,7 +117,15 @@ current workspace session. The operator can check the Printer tab for job status
 ## Printer tab
 
 The Printer tab monitors a separately configured Moonraker endpoint with HTTP
-GET requests. Job progress prefers the reported display progress, including
+GET requests. Remaining time prefers the printer's reported value; when absent,
+the dashboard subtracts active printing time from the file's slicer estimate.
+Metadata is read with a short timeout and cached for thirty seconds per job;
+job changes and restarts invalidate the cache. Missing or overrun estimates stay
+unknown. Remaining time is shown in rounded-up minutes, with an estimated finish
+in the phone's local time and date when needed. Paused jobs and stale readings
+do not show an absolute finish time.
+
+Job progress prefers the reported display progress, including
 M73 updates, then file progress and the job status value. The dashboard shows
 elapsed time, printer-reported remaining time, layer counts, and bed and tool
 temperatures when available. Polling runs while the tab is visible and the
