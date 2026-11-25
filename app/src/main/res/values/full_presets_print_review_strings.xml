@@ -7,6 +7,7 @@
     <string name="full_presets_print_review_refresh">Check printer again</string>
     <string name="full_presets_print_review_printer">Printer · %1$s</string>
     <string name="full_presets_print_review_reported_at">Filaments checked at %1$s.</string>
+    <string name="full_presets_print_review_retained_filaments">Showing the filament details used for slicing. They have not been rechecked.</string>
     <string name="full_presets_print_review_tools">Tools required by this G-code</string>
     <string name="full_presets_print_review_estimated_usage">Estimated filament · %1$s</string>
     <string name="full_presets_print_review_unknown_usage">Filament estimate unavailable.</string>

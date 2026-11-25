@@ -32,6 +32,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.u1.slicer.R
 import com.u1.slicer.presets.FullPresetPrintPhase
 import com.u1.slicer.presets.FullPresetPrintReview
+import com.u1.slicer.presets.FullPresetPrinterFilaments
 import java.util.Date
 
 @Composable
@@ -47,6 +48,9 @@ internal fun FullPresetPrintReviewDialog(
     val sending = review.phase == FullPresetPrintPhase.UPLOADING || review.phase == FullPresetPrintPhase.STARTING
     val busy = printInProgress || sending || review.phase == FullPresetPrintPhase.CHECKING
     val report = review.report
+    // A failed readiness check must not erase the spool choices used for slicing.
+    // This fallback is display-only; only a successful preflight enables Print.
+    val displayedReport = report ?: review.output.mapping?.confirmed
     val canPrint = !busy && ready && report != null && review.job != null && review.output.mapping != null
     val needsSetup = review.output.mapping == null || review.message in setOf(
         R.string.full_presets_print_material_mismatch,
@@ -91,14 +95,20 @@ internal fun FullPresetPrintReviewDialog(
                         LinearProgressIndicator(progress = { percent.coerceIn(0, 100) / 100f }, modifier = Modifier.fillMaxWidth())
                     }
                 }
-                if (report != null) {
-                    val time = DateFormat.getTimeFormat(LocalContext.current).format(Date(report.snapshot.receivedAtMillis))
+                if (displayedReport != null) {
+                    if (report == null) {
+                        Text(
+                            stringResource(R.string.full_presets_print_review_retained_filaments),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    val time = DateFormat.getTimeFormat(LocalContext.current).format(Date(displayedReport.snapshot.receivedAtMillis))
                     Text(
                         stringResource(R.string.full_presets_print_review_reported_at, time),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                PrintToolUsage(review)
+                PrintToolUsage(review, displayedReport)
                 if (!busy && review.phase == FullPresetPrintPhase.FAILED && needsSetup) {
                     TextButton(
                         onClick = onPrintSetup,
@@ -142,9 +152,9 @@ internal fun FullPresetPrintReviewDialog(
 }
 
 @Composable
-private fun PrintToolUsage(review: FullPresetPrintReview) {
+private fun PrintToolUsage(review: FullPresetPrintReview, report: FullPresetPrinterFilaments.Ready?) {
     val usage = review.usage ?: return
-    val slots = review.report?.snapshot?.slots.orEmpty()
+    val slots = report?.snapshot?.slots.orEmpty()
     val locale = LocalConfiguration.current.locales[0]
     val measure = remember(locale) { MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.SHORT) }
     Text(stringResource(R.string.full_presets_print_review_tools), style = MaterialTheme.typography.titleSmall)

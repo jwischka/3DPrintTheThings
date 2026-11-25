@@ -93,6 +93,10 @@ must be confirmed loaded, and each reported material family must match the
 corresponding family in the slice configuration. The user reviews the reported
 spool and the selected preset together because a material-family match does not
 establish that the preset is suitable for a particular brand or subtype.
+If readiness checking fails before a fresh report is available, review retains
+the slice-time spool details and their timestamp, explicitly labelled as not
+rechecked. This display fallback cannot enable printing; a successful preflight
+is still required.
 
 After explicit confirmation, dispatch checks the file, connection, printer
 readiness and fresh spool report before uploading. It uploads once under a

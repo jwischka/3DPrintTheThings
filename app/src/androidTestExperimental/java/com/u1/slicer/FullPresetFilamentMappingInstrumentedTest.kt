@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.core.content.FileProvider
@@ -38,6 +39,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -72,6 +74,7 @@ class FullPresetFilamentMappingInstrumentedTest {
         val gcodeBytes = AtomicLong()
         val remoteName = AtomicReference<String>()
         val startCall = AtomicReference<JSONObject>()
+        val printerBusy = AtomicBoolean(true)
         try {
             MockWebServer().use { server ->
                 server.start(InetAddress.getByName("127.0.0.1"), 0)
@@ -81,7 +84,7 @@ class FullPresetFilamentMappingInstrumentedTest {
                         when (request.method to request.path) {
                             "GET" to "/server/info" -> return MockResponse().setBody(SERVER_READY)
                             "GET" to "/printer/objects/query?webhooks&print_stats&machine_state_manager=main_state" ->
-                                return MockResponse().setBody(PRINTER_READY)
+                                return MockResponse().setBody(if (printerBusy.get()) PRINTER_BUSY else PRINTER_READY)
                             "GET" to "/websocket" -> return MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                                 override fun onMessage(webSocket: WebSocket, text: String) {
                                     val call = JSONObject(text)
@@ -196,7 +199,26 @@ class FullPresetFilamentMappingInstrumentedTest {
                             gcodeBytes.set(File(output.result.gcodePath).length())
                             compose.onNodeWithTag("full-presets-export").assertIsEnabled()
                             compose.onNodeWithTag("full-presets-review-print").performClick()
+                            waitForText(R.string.full_presets_print_printer_not_ready)
+                            waitForText(R.string.full_presets_print_review_retained_filaments)
+                            assertEquals(FullPresetPrintPhase.FAILED, model.state.value.printReview?.phase)
+                            assertNull(model.state.value.printReview?.report)
+                            compose.onNodeWithTag("full-presets-confirm-print").assertDoesNotExist()
+                            for (slot in listOf(2, 3)) {
+                                compose.onNodeWithText(context.getString(
+                                    R.string.full_presets_mapping_slot_report, slot,
+                                    context.getString(R.string.full_presets_mapping_loaded),
+                                    "Snapmaker", "PLA", "Matte",
+                                )).performScrollTo().assertIsDisplayed()
+                            }
+                            scenario.onActivity { model.confirmPrint() }
+                            assertEquals(0, uploads.get())
+                            assertEquals(0, starts.get())
+                            printerBusy.set(false)
+                            control("full-presets-print-review-refresh").performClick()
                             waitForText(R.string.full_presets_print_review_ready)
+                            compose.onNodeWithText(context.getString(R.string.full_presets_print_review_retained_filaments))
+                                .assertDoesNotExist()
                             val review = requireNotNull(model.state.value.printReview)
                             assertEquals(FullPresetPrintPhase.READY, review.phase)
                             assertEquals(setOf(2, 3), review.usage?.requiredSlots)
@@ -258,6 +280,7 @@ class FullPresetFilamentMappingInstrumentedTest {
         const val APPLY = "full-presets-apply-printer-filaments"
         const val SERVER_READY = """{"result":{"klippy_connected":true,"klippy_state":"ready"}}"""
         const val PRINTER_READY = """{"result":{"status":{"webhooks":{"state":"ready"},"print_stats":{"state":"standby"},"machine_state_manager":{"main_state":0}}}}"""
+        const val PRINTER_BUSY = """{"result":{"status":{"webhooks":{"state":"ready"},"print_stats":{"state":"printing"},"machine_state_manager":{"main_state":1}}}}"""
         const val SLOTS = """
             {"result":{"status":{"print_task_config":{
                 "filament_exist":[false,true,true,false],

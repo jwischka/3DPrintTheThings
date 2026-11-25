@@ -240,6 +240,8 @@ class FullPresetLayoutInstrumentedTest {
 
     private fun checkSettings() {
         openSettings()
+        compose.onNodeWithTag("full-presets-printer-and-quality")
+            .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
         compose.onNodeWithTag("full-presets-printer")
             .performScrollTo().assertIsDisplayed().assertIsEnabled()
         control("full-presets-settings-done").performClick()
