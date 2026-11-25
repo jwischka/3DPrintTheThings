@@ -116,7 +116,7 @@ class FullPresetPrinterInstrumentedTest {
                         compose.onNodeWithTag("experimental-printer-remaining").performScrollTo()
                             .assertIsDisplayed().assertTextContains("About 46 minutes remaining")
                         compose.onNodeWithTag("experimental-printer-estimated-finish").performScrollTo()
-                            .assertIsDisplayed().assertTextContains("Estimated finish:")
+                            .assertIsDisplayed().assertTextContains("Estimated finish:", substring = true)
                         compose.onNodeWithTag("experimental-printer-connection-state").performScrollTo()
                         compose.waitUntil(20_000) {
                             compose.onAllNodesWithText("Snapshot received at", substring = true)
